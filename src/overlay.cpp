@@ -24,6 +24,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <wchar.h>
+#include <iconv.h>
+#include <string>
 
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
@@ -919,16 +922,89 @@ static void position_layer(struct swapchain_data *data)
    }
 }
 
+namespace {
+	std::string to_utf8(const wchar_t* beg, const wchar_t* end) {
+		const size_t	bytes_sz = 4*(end-beg);
+		std::string	rv;
+		rv.resize(bytes_sz);
+		auto		conv = iconv_open("UTF-8", "WCHAR_T");
+		if(((void*)-1) == conv)
+			return "";
+		char		*pIn = (char*)beg,
+				*pOut = (char*)&rv[0];
+		size_t		sIn = sizeof(wchar_t)*(end-beg),
+				sOut = bytes_sz;
+		const auto cv = iconv(conv, &pIn, &sIn, &pOut, &sOut);
+		if(cv) return "";
+		else rv.resize(sOut);
+		iconv_close(conv);
+		return rv;
+	}
+
+	const wchar_t* sample_data(ImVec2& out) {
+		static const wchar_t	data[] = 
+		L"linux-hunter 0.0.7              (1001/   0/   0 w/u/s)\n"
+		"SessionId:[Pc8Ec&JMnaQ2] Host:[Emetta]\n"
+		"\n"
+		"Player Name                     Id  Damage    %       \n"
+		"Left the session                0         8223   21.20\n"
+		"Legolas                         1        13063   33.67\n"
+		"Emetta                          2        12798   32.99\n"
+		"Umi                             3         4712   12.15\n"
+		"Total                                    38796  100.00\n"
+		"\n"
+		"Monster Name                    HP            %       \n"
+		"Zinogre                           12489/ 64068   19.49\n"
+		"Fulgur Anjanath                   43884/ 48796   89.93\n"
+		"Banbaro                           41945/ 42126   99.57";
+
+		const wchar_t	*cur_data = data,
+				*next_line = wcschr(cur_data, L'\n');
+		out.x = 0.0;
+		out.y = 1.0;
+		while(next_line) {
+			const auto sz = (float)(next_line - cur_data);
+			if(sz > out.x) out.x = sz;
+			out.y += 1.0;
+			cur_data = next_line + 1;
+			next_line = wcschr(cur_data, L'\n');
+		}
+		// we need to increase the size
+		out.x *= 8.0;
+		out.y *= 20.0;
+
+		return data;
+	}
+}
+
 static void compute_swapchain_display(struct swapchain_data *data)
 {
    struct device_data *device_data = data->device;
    struct instance_data *instance_data = device_data->instance;
 
+   const wchar_t	*cur_data = sample_data(data->window_size);
+
    ImGui::SetCurrentContext(data->imgui_context);
    ImGui::NewFrame();
    position_layer(data);
-   ImGui::Begin("Mesa overlay");
+   ImGui::Begin("vkdto");
+
+   const wchar_t	*next_line = wcschr(cur_data, L'\n');
+
+   while(next_line) {
+	   ImGui::Text("%s", to_utf8(cur_data, next_line).c_str());
+	   cur_data = next_line+1;
+	   next_line = wcschr(cur_data, L'\n');
+   }
+   const auto	sz_left = wcslen(cur_data);
+   ImGui::Text("%s", to_utf8(cur_data, cur_data + sz_left).c_str());
+
+   data->window_size = ImVec2(data->window_size.x, ImGui::GetCursorPosY() + 10.0f);
+   ImGui::End();
+
+   /*ImGui::Begin("Mesa overlay");
    ImGui::Text("Device: %s", device_data->properties.deviceName);
+   //ImGui::Text("Kanjis: \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e (nihongo)");
 
    const char *format_name = vk_Format_to_str(data->format);
    format_name = format_name ? (format_name + strlen("VK_FORMAT_")) : "unknown";
@@ -937,7 +1013,7 @@ static void compute_swapchain_display(struct swapchain_data *data)
    if (instance_data->params.enabled[OVERLAY_PARAM_ENABLED_fps])
       ImGui::Text("FPS: %.2f" , data->fps);
 
-   /* Recompute min/max */
+   // Recompute min/max 
    for (uint32_t s = 0; s < OVERLAY_PARAM_ENABLED_MAX; s++) {
       data->stats_min.stats[s] = UINT64_MAX;
       data->stats_max.stats[s] = 0;
@@ -993,7 +1069,7 @@ static void compute_swapchain_display(struct swapchain_data *data)
       }
    }
    data->window_size = ImVec2(data->window_size.x, ImGui::GetCursorPosY() + 10.0f);
-   ImGui::End();
+   ImGui::End();*/
    ImGui::EndFrame();
    ImGui::Render();
 }

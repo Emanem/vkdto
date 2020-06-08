@@ -24,7 +24,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
-#include <dlfcn.h>
 
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
@@ -74,7 +73,7 @@ struct queue_data;
 struct device_data {
    struct instance_data *instance;
 
-   //PFN_vkSetDeviceLoaderData set_device_loader_data;
+   PFN_vkSetDeviceLoaderData set_device_loader_data;
 
    struct vk_device_dispatch_table vtable;
    VkPhysicalDevice physical_device;
@@ -437,7 +436,7 @@ static void device_map_queues(struct device_data *data,
                                      pCreateInfo->pQueueCreateInfos[i].queueFamilyIndex,
                                      j, &queue);
 
-         //VK_CHECK(data->set_device_loader_data(data->device, queue));
+         VK_CHECK(data->set_device_loader_data(data->device, queue));
 
          data->queues[queue_index++] =
             new_queue_data(queue, &family_props[pCreateInfo->pQueueCreateInfos[i].queueFamilyIndex],
@@ -534,8 +533,8 @@ struct overlay_draw *get_overlay_draw(struct swapchain_data *data)
    VK_CHECK(device_data->vtable.AllocateCommandBuffers(device_data->device,
                                                        &cmd_buffer_info,
                                                        &draw->command_buffer));
-   //VK_CHECK(device_data->set_device_loader_data(device_data->device,
-   //                                            draw->command_buffer));
+   VK_CHECK(device_data->set_device_loader_data(device_data->device,
+                                                draw->command_buffer));
 
 
    VkFenceCreateInfo fence_info = {};
@@ -694,7 +693,7 @@ static void control_send_connection_string(struct device_data *device_data)
                 deviceName, strlen(deviceName));
 
    const char *mesaVersionCmd = "MesaVersion";
-   const char *mesaVersionString = "Mesa VKDTO";
+   const char *mesaVersionString = "Mesa vkdto";
 
    control_send(instance_data, mesaVersionCmd, strlen(mesaVersionCmd),
                 mesaVersionString, strlen(mesaVersionString));
@@ -1410,7 +1409,6 @@ static struct overlay_draw *render_swapchain_display(struct swapchain_data *data
 static const uint32_t overlay_vert_spv[] = {
 #include "overlay.vert.spv.h"
 };
-
 static const uint32_t overlay_frag_spv[] = {
 #include "overlay.frag.spv.h"
 };
@@ -2447,52 +2445,14 @@ static VkResult overlay_CreateDevice(
    instance_data->vtable.GetPhysicalDeviceProperties(device_data->physical_device,
                                                      &device_data->properties);
 
-   //device_data->set_device_loader_data = 0;
+   VkLayerDeviceCreateInfo *load_data_info =
+      get_device_chain_info(pCreateInfo, VK_LOADER_DATA_CALLBACK);
+   device_data->set_device_loader_data = load_data_info->u.pfnSetDeviceLoaderData;
 
    device_map_queues(device_data, pCreateInfo);
 
    return result;
 }
-
-VK_LAYER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDevice* pDevice) {
-   struct instance_data *instance_data =
-      FIND(struct instance_data, physicalDevice);
-
-   PFN_vkGetDeviceProcAddr fpGetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)dlsym(RTLD_NEXT, "vkGetDeviceProcAddr");
-   PFN_vkCreateDevice fpCreateDevice = (PFN_vkCreateDevice)dlsym(RTLD_NEXT, "vkCreateDevice");
-   if (!fpGetDeviceProcAddr || !fpCreateDevice) {
-      return VK_ERROR_INITIALIZATION_FAILED;
-   }
-
-   VkPhysicalDeviceFeatures device_features = {};
-   VkDeviceCreateInfo device_info = *pCreateInfo;
-
-   if (pCreateInfo->pEnabledFeatures)
-      device_features = *(pCreateInfo->pEnabledFeatures);
-   if (instance_data->pipeline_statistics_enabled) {
-      device_features.inheritedQueries = true;
-      device_features.pipelineStatisticsQuery = true;
-   }
-   device_info.pEnabledFeatures = &device_features;
-
-
-   VkResult result = fpCreateDevice(physicalDevice, &device_info, pAllocator, pDevice);
-   if (result != VK_SUCCESS) return result;
-
-   struct device_data *device_data = new_device_data(*pDevice, instance_data);
-   device_data->physical_device = physicalDevice;
-   vk_load_device_commands(*pDevice, fpGetDeviceProcAddr, &device_data->vtable);
-
-   instance_data->vtable.GetPhysicalDeviceProperties(device_data->physical_device,
-                                                     &device_data->properties);
-
-   //device_data->set_device_loader_data = 0;
-
-   device_map_queues(device_data, pCreateInfo);
-
-   return result;
-}
-
 
 static void overlay_DestroyDevice(
     VkDevice                                    device,
@@ -2553,43 +2513,6 @@ static VkResult overlay_CreateInstance(
    return result;
 }
 
-VK_LAYER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkInstance* pInstance) {
-   PFN_vkCreateInstance fpCreateInstance = (PFN_vkCreateInstance)dlsym(RTLD_NEXT, "vkCreateInstance");
-   PFN_vkGetInstanceProcAddr fpGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(RTLD_NEXT, "vkGetInstanceProcAddr");
-   if (!fpCreateInstance || !fpGetInstanceProcAddr) {
-      return VK_ERROR_INITIALIZATION_FAILED;
-   }
-
-   VkResult result = fpCreateInstance(pCreateInfo, pAllocator, pInstance);
-   if (result != VK_SUCCESS) return result;
-
-   struct instance_data *instance_data = new_instance_data(*pInstance);
-   vk_load_instance_commands(instance_data->instance,
-                             fpGetInstanceProcAddr,
-                             &instance_data->vtable);
-   instance_data_map_physical_devices(instance_data, true);
-
-   parse_overlay_env(&instance_data->params, getenv("VK_LAYER_MESA_OVERLAY_CONFIG"));
-
-   /* If there's no control file, and an output_file was specified, start
-    * capturing fps data right away.
-    */
-   instance_data->capture_enabled =
-      instance_data->params.output_file && instance_data->params.control < 0;
-   instance_data->capture_started = instance_data->capture_enabled;
-
-   for (int i = OVERLAY_PARAM_ENABLED_vertices;
-        i <= OVERLAY_PARAM_ENABLED_compute_invocations; i++) {
-      if (instance_data->params.enabled[i]) {
-         instance_data->pipeline_statistics_enabled = true;
-         break;
-      }
-   }
-
-   return result;
-
-}
-
 static void overlay_DestroyInstance(
     VkInstance                                  instance,
     const VkAllocationCallbacks*                pAllocator)
@@ -2600,11 +2523,14 @@ static void overlay_DestroyInstance(
    destroy_instance_data(instance_data);
 }
 
+extern "C" VK_LAYER_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkdto_vkGetDeviceProcAddr(VkDevice dev,
+                                                                              const char *funcName);
+
 static const struct {
    const char *name;
    void *ptr;
 } name_to_funcptr_map[] = {
-   { "vkGetDeviceProcAddr", (void *) vkGetDeviceProcAddr },
+   { "vkGetDeviceProcAddr", (void *) vkdto_vkGetDeviceProcAddr },
 #define ADD_HOOK(fn) { "vk" # fn, (void *) overlay_ ## fn }
 #define ADD_ALIAS_HOOK(alias, fn) { "vk" # alias, (void *) overlay_ ## fn }
    ADD_HOOK(AllocateCommandBuffers),
@@ -2649,7 +2575,7 @@ static void *find_ptr(const char *name)
    return NULL;
 }
 
-VK_LAYER_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice dev,
+extern "C" VK_LAYER_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkdto_vkGetDeviceProcAddr(VkDevice dev,
                                                                              const char *funcName)
 {
    void *ptr = find_ptr(funcName);
@@ -2662,7 +2588,7 @@ VK_LAYER_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkD
    return device_data->vtable.GetDeviceProcAddr(dev, funcName);
 }
 
-VK_LAYER_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance,
+extern "C" VK_LAYER_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkdto_vkGetInstanceProcAddr(VkInstance instance,
                                                                                const char *funcName)
 {
    void *ptr = find_ptr(funcName);

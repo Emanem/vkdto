@@ -1,0 +1,22 @@
+{
+    "file_format_version" : "1.0.0",
+    "layer" : {
+      "name": "vkdto x86_64",
+      "type": "GLOBAL",
+      "api_version": "1.2.135",
+      "library_path": "/home/ema/tmp/vkdto/vkdto.so",
+      "implementation_version": "1",
+      "description": "Vulkan Dynamic Text Overlay",
+      "functions": {
+         "vkGetInstanceProcAddr": "vkdto_vkGetInstanceProcAddr",
+         "vkGetDeviceProcAddr": "vkdto_vkGetDeviceProcAddr"
+      },
+      "enable_environment": {
+        "VKDTOHUD": "1"
+      },
+      "disable_environment": {
+        "DISABLE_VKDTOHUD": "1"
+      }
+    }
+}
+  

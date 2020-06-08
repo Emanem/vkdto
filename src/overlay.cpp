@@ -2013,98 +2013,6 @@ static VkResult overlay_AcquireNextImage2KHR(
    return result;
 }
 
-static void overlay_CmdDraw(
-    VkCommandBuffer                             commandBuffer,
-    uint32_t                                    vertexCount,
-    uint32_t                                    instanceCount,
-    uint32_t                                    firstVertex,
-    uint32_t                                    firstInstance)
-{
-   struct command_buffer_data *cmd_buffer_data =
-      FIND(struct command_buffer_data, commandBuffer);
-   struct device_data *device_data = cmd_buffer_data->device;
-   device_data->vtable.CmdDraw(commandBuffer, vertexCount, instanceCount,
-                               firstVertex, firstInstance);
-}
-
-static void overlay_CmdDrawIndexed(
-    VkCommandBuffer                             commandBuffer,
-    uint32_t                                    indexCount,
-    uint32_t                                    instanceCount,
-    uint32_t                                    firstIndex,
-    int32_t                                     vertexOffset,
-    uint32_t                                    firstInstance)
-{
-   struct command_buffer_data *cmd_buffer_data =
-      FIND(struct command_buffer_data, commandBuffer);
-   struct device_data *device_data = cmd_buffer_data->device;
-   device_data->vtable.CmdDrawIndexed(commandBuffer, indexCount, instanceCount,
-                                      firstIndex, vertexOffset, firstInstance);
-}
-
-static void overlay_CmdDrawIndirect(
-    VkCommandBuffer                             commandBuffer,
-    VkBuffer                                    buffer,
-    VkDeviceSize                                offset,
-    uint32_t                                    drawCount,
-    uint32_t                                    stride)
-{
-   struct command_buffer_data *cmd_buffer_data =
-      FIND(struct command_buffer_data, commandBuffer);
-   struct device_data *device_data = cmd_buffer_data->device;
-   device_data->vtable.CmdDrawIndirect(commandBuffer, buffer, offset, drawCount, stride);
-}
-
-static void overlay_CmdDrawIndexedIndirect(
-    VkCommandBuffer                             commandBuffer,
-    VkBuffer                                    buffer,
-    VkDeviceSize                                offset,
-    uint32_t                                    drawCount,
-    uint32_t                                    stride)
-{
-   struct command_buffer_data *cmd_buffer_data =
-      FIND(struct command_buffer_data, commandBuffer);
-   struct device_data *device_data = cmd_buffer_data->device;
-   device_data->vtable.CmdDrawIndexedIndirect(commandBuffer, buffer, offset, drawCount, stride);
-}
-
-static void overlay_CmdDispatch(
-    VkCommandBuffer                             commandBuffer,
-    uint32_t                                    groupCountX,
-    uint32_t                                    groupCountY,
-    uint32_t                                    groupCountZ)
-{
-   struct command_buffer_data *cmd_buffer_data =
-      FIND(struct command_buffer_data, commandBuffer);
-   struct device_data *device_data = cmd_buffer_data->device;
-   device_data->vtable.CmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
-}
-
-static void overlay_CmdDispatchIndirect(
-    VkCommandBuffer                             commandBuffer,
-    VkBuffer                                    buffer,
-    VkDeviceSize                                offset)
-{
-   struct command_buffer_data *cmd_buffer_data =
-      FIND(struct command_buffer_data, commandBuffer);
-   struct device_data *device_data = cmd_buffer_data->device;
-   device_data->vtable.CmdDispatchIndirect(commandBuffer, buffer, offset);
-}
-
-static void overlay_CmdBindPipeline(
-    VkCommandBuffer                             commandBuffer,
-    VkPipelineBindPoint                         pipelineBindPoint,
-    VkPipeline                                  pipeline)
-{
-   struct command_buffer_data *cmd_buffer_data =
-      FIND(struct command_buffer_data, commandBuffer);
-   switch (pipelineBindPoint) {
-   default: break;
-   }
-   struct device_data *device_data = cmd_buffer_data->device;
-   device_data->vtable.CmdBindPipeline(commandBuffer, pipelineBindPoint, pipeline);
-}
-
 static VkResult overlay_BeginCommandBuffer(
     VkCommandBuffer                             commandBuffer,
     const VkCommandBufferBeginInfo*             pBeginInfo)
@@ -2487,15 +2395,6 @@ static const struct {
    ADD_HOOK(BeginCommandBuffer),
    ADD_HOOK(EndCommandBuffer),
    ADD_HOOK(CmdExecuteCommands),
-
-   ADD_HOOK(CmdDraw),
-   ADD_HOOK(CmdDrawIndexed),
-   ADD_HOOK(CmdDrawIndirect),
-   ADD_HOOK(CmdDrawIndexedIndirect),
-   ADD_HOOK(CmdDispatch),
-   ADD_HOOK(CmdDispatchIndirect),
-
-   ADD_HOOK(CmdBindPipeline),
 
    ADD_HOOK(CreateSwapchainKHR),
    ADD_HOOK(QueuePresentKHR),

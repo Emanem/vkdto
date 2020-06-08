@@ -67,10 +67,6 @@ struct instance_data {
    bool capture_started;
 };
 
-struct frame_stat {
-   uint64_t stats[OVERLAY_PARAM_ENABLED_MAX];
-};
-
 /* Mapped from VkDevice */
 struct queue_data;
 struct device_data {
@@ -88,9 +84,6 @@ struct device_data {
 
    struct queue_data **queues;
    uint32_t n_queues;
-
-   /* For a single frame */
-   struct frame_stat frame_stats;
 };
 
 /* Mapped from VkCommandBuffer */
@@ -103,8 +96,6 @@ struct command_buffer_data {
    VkQueryPool pipeline_query_pool;
    VkQueryPool timestamp_query_pool;
    uint32_t query_index;
-
-   struct frame_stat stats;
 
    struct list_head link; /* link into queue_data::running_command_buffer */
 };
@@ -191,14 +182,6 @@ struct swapchain_data {
 
    enum overlay_param_enabled stat_selector;
    double time_dividor;
-   struct frame_stat stats_min, stats_max;
-   struct frame_stat frames_stats[200];
-
-   /* Over a single frame */
-   struct frame_stat frame_stats;
-
-   /* Over fps_sampling_period */
-   struct frame_stat accumulated_stats;
 };
 
 static const VkQueryPipelineStatisticFlags overlay_query_flags =
@@ -773,23 +756,11 @@ static void snapshot_swapchain_frame(struct swapchain_data *data)
 {
    struct device_data *device_data = data->device;
    struct instance_data *instance_data = device_data->instance;
-   uint32_t f_idx = data->n_frames % ARRAY_SIZE(data->frames_stats);
    uint64_t now = os_time_get(); /* us */
 
    if (instance_data->params.control >= 0) {
       control_client_check(device_data);
       process_control_socket(instance_data);
-   }
-
-   if (data->last_present_time) {
-      data->frame_stats.stats[OVERLAY_PARAM_ENABLED_frame_timing] =
-         now - data->last_present_time;
-   }
-
-   memset(&data->frames_stats[f_idx], 0, sizeof(data->frames_stats[f_idx]));
-   for (int s = 0; s < OVERLAY_PARAM_ENABLED_MAX; s++) {
-      data->frames_stats[f_idx].stats[s] += device_data->frame_stats.stats[s] + data->frame_stats.stats[s];
-      data->accumulated_stats.stats[s] += device_data->frame_stats.stats[s] + data->frame_stats.stats[s];
    }
 
    /* If capture has been enabled but it hasn't started yet, it means we are on
@@ -831,23 +802,10 @@ static void snapshot_swapchain_frame(struct swapchain_data *data)
                fprintf(instance_data->params.output_file, "\n");
             }
 
-            for (int s = 0; s < OVERLAY_PARAM_ENABLED_MAX; s++) {
-               if (!instance_data->params.enabled[s])
-                  continue;
-               if (s == OVERLAY_PARAM_ENABLED_fps) {
-                  fprintf(instance_data->params.output_file,
-                          "%s%.2f", s == 0 ? "" : ", ", data->fps);
-               } else {
-                  fprintf(instance_data->params.output_file,
-                          "%s%" PRIu64, s == 0 ? "" : ", ",
-                          data->accumulated_stats.stats[s]);
-               }
-            }
             fprintf(instance_data->params.output_file, "\n");
             fflush(instance_data->params.output_file);
          }
 
-         memset(&data->accumulated_stats, 0, sizeof(data->accumulated_stats));
          data->n_frames_since_update = 0;
          data->last_fps_update = now;
 
@@ -858,39 +816,9 @@ static void snapshot_swapchain_frame(struct swapchain_data *data)
       data->last_fps_update = now;
    }
 
-   memset(&device_data->frame_stats, 0, sizeof(device_data->frame_stats));
-   memset(&data->frame_stats, 0, sizeof(device_data->frame_stats));
-
    data->last_present_time = now;
    data->n_frames++;
    data->n_frames_since_update++;
-}
-
-static float get_time_stat(void *_data, int _idx)
-{
-   struct swapchain_data *data = (struct swapchain_data *) _data;
-   if ((ARRAY_SIZE(data->frames_stats) - _idx) > data->n_frames)
-      return 0.0f;
-   int idx = ARRAY_SIZE(data->frames_stats) +
-      data->n_frames < ARRAY_SIZE(data->frames_stats) ?
-      _idx - data->n_frames :
-      _idx + data->n_frames;
-   idx %= ARRAY_SIZE(data->frames_stats);
-   /* Time stats are in us. */
-   return data->frames_stats[idx].stats[data->stat_selector] / data->time_dividor;
-}
-
-static float get_stat(void *_data, int _idx)
-{
-   struct swapchain_data *data = (struct swapchain_data *) _data;
-   if ((ARRAY_SIZE(data->frames_stats) - _idx) > data->n_frames)
-      return 0.0f;
-   int idx = ARRAY_SIZE(data->frames_stats) +
-      data->n_frames < ARRAY_SIZE(data->frames_stats) ?
-      _idx - data->n_frames :
-      _idx + data->n_frames;
-   idx %= ARRAY_SIZE(data->frames_stats);
-   return data->frames_stats[idx].stats[data->stat_selector];
 }
 
 static void position_layer(struct swapchain_data *data)
@@ -979,8 +907,8 @@ namespace {
 
 static void compute_swapchain_display(struct swapchain_data *data)
 {
-   struct device_data *device_data = data->device;
-   struct instance_data *instance_data = device_data->instance;
+   //struct device_data *device_data = data->device;
+   //struct instance_data *instance_data = device_data->instance;
 
    const wchar_t	*cur_data = sample_data(data->window_size);
 
@@ -1954,8 +1882,6 @@ static VkResult overlay_QueuePresentKHR(
    struct instance_data *instance_data = device_data->instance;
    uint32_t query_results[OVERLAY_QUERY_COUNT];
 
-   device_data->frame_stats.stats[OVERLAY_PARAM_ENABLED_frame]++;
-
    if (list_length(&queue_data->running_command_buffer) > 0) {
       /* Before getting the query results, make sure the operations have
        * completed.
@@ -1979,11 +1905,6 @@ static VkResult overlay_QueuePresentKHR(
                                                              cmd_buffer_data->query_index, 1,
                                                              sizeof(uint32_t) * OVERLAY_QUERY_COUNT,
                                                              query_results, 0, VK_QUERY_RESULT_WAIT_BIT));
-
-            for (uint32_t i = OVERLAY_PARAM_ENABLED_vertices;
-                 i <= OVERLAY_PARAM_ENABLED_compute_invocations; i++) {
-               device_data->frame_stats.stats[i] += query_results[i - OVERLAY_PARAM_ENABLED_vertices];
-            }
          }
          if (cmd_buffer_data->timestamp_query_pool) {
             uint64_t gpu_timestamps[2] = { 0 };
@@ -1995,9 +1916,6 @@ static VkResult overlay_QueuePresentKHR(
 
             gpu_timestamps[0] &= queue_data->timestamp_mask;
             gpu_timestamps[1] &= queue_data->timestamp_mask;
-            device_data->frame_stats.stats[OVERLAY_PARAM_ENABLED_gpu_timing] +=
-               (gpu_timestamps[1] - gpu_timestamps[0]) *
-               device_data->properties.limits.timestampPeriod;
          }
       }
    }
@@ -2026,10 +1944,7 @@ static VkResult overlay_QueuePresentKHR(
          present_info.pSwapchains = &swapchain;
          present_info.pImageIndices = &image_index;
 
-         uint64_t ts0 = os_time_get();
          result = queue_data->device->vtable.QueuePresentKHR(queue, &present_info);
-         uint64_t ts1 = os_time_get();
-         swapchain_data->frame_stats.stats[OVERLAY_PARAM_ENABLED_present_timing] += ts1 - ts0;
       }
    } else {
       for (uint32_t i = 0; i < pPresentInfo->swapchainCount; i++) {
@@ -2058,10 +1973,7 @@ static VkResult overlay_QueuePresentKHR(
          present_info.pWaitSemaphores = &draw->semaphore;
          present_info.waitSemaphoreCount = 1;
 
-         uint64_t ts0 = os_time_get();
          VkResult chain_result = queue_data->device->vtable.QueuePresentKHR(queue, &present_info);
-         uint64_t ts1 = os_time_get();
-         swapchain_data->frame_stats.stats[OVERLAY_PARAM_ENABLED_present_timing] += ts1 - ts0;
          if (pPresentInfo->pResults)
             pPresentInfo->pResults[i] = chain_result;
          if (chain_result != VK_SUCCESS && result == VK_SUCCESS)
@@ -2083,14 +1995,8 @@ static VkResult overlay_AcquireNextImageKHR(
       FIND(struct swapchain_data, swapchain);
    struct device_data *device_data = swapchain_data->device;
 
-   uint64_t ts0 = os_time_get();
    VkResult result = device_data->vtable.AcquireNextImageKHR(device, swapchain, timeout,
                                                              semaphore, fence, pImageIndex);
-   uint64_t ts1 = os_time_get();
-
-   swapchain_data->frame_stats.stats[OVERLAY_PARAM_ENABLED_acquire_timing] += ts1 - ts0;
-   swapchain_data->frame_stats.stats[OVERLAY_PARAM_ENABLED_acquire]++;
-
    return result;
 }
 
@@ -2103,13 +2009,7 @@ static VkResult overlay_AcquireNextImage2KHR(
       FIND(struct swapchain_data, pAcquireInfo->swapchain);
    struct device_data *device_data = swapchain_data->device;
 
-   uint64_t ts0 = os_time_get();
    VkResult result = device_data->vtable.AcquireNextImage2KHR(device, pAcquireInfo, pImageIndex);
-   uint64_t ts1 = os_time_get();
-
-   swapchain_data->frame_stats.stats[OVERLAY_PARAM_ENABLED_acquire_timing] += ts1 - ts0;
-   swapchain_data->frame_stats.stats[OVERLAY_PARAM_ENABLED_acquire]++;
-
    return result;
 }
 
@@ -2122,7 +2022,6 @@ static void overlay_CmdDraw(
 {
    struct command_buffer_data *cmd_buffer_data =
       FIND(struct command_buffer_data, commandBuffer);
-   cmd_buffer_data->stats.stats[OVERLAY_PARAM_ENABLED_draw]++;
    struct device_data *device_data = cmd_buffer_data->device;
    device_data->vtable.CmdDraw(commandBuffer, vertexCount, instanceCount,
                                firstVertex, firstInstance);
@@ -2138,7 +2037,6 @@ static void overlay_CmdDrawIndexed(
 {
    struct command_buffer_data *cmd_buffer_data =
       FIND(struct command_buffer_data, commandBuffer);
-   cmd_buffer_data->stats.stats[OVERLAY_PARAM_ENABLED_draw_indexed]++;
    struct device_data *device_data = cmd_buffer_data->device;
    device_data->vtable.CmdDrawIndexed(commandBuffer, indexCount, instanceCount,
                                       firstIndex, vertexOffset, firstInstance);
@@ -2153,7 +2051,6 @@ static void overlay_CmdDrawIndirect(
 {
    struct command_buffer_data *cmd_buffer_data =
       FIND(struct command_buffer_data, commandBuffer);
-   cmd_buffer_data->stats.stats[OVERLAY_PARAM_ENABLED_draw_indirect]++;
    struct device_data *device_data = cmd_buffer_data->device;
    device_data->vtable.CmdDrawIndirect(commandBuffer, buffer, offset, drawCount, stride);
 }
@@ -2167,7 +2064,6 @@ static void overlay_CmdDrawIndexedIndirect(
 {
    struct command_buffer_data *cmd_buffer_data =
       FIND(struct command_buffer_data, commandBuffer);
-   cmd_buffer_data->stats.stats[OVERLAY_PARAM_ENABLED_draw_indexed_indirect]++;
    struct device_data *device_data = cmd_buffer_data->device;
    device_data->vtable.CmdDrawIndexedIndirect(commandBuffer, buffer, offset, drawCount, stride);
 }
@@ -2180,7 +2076,6 @@ static void overlay_CmdDispatch(
 {
    struct command_buffer_data *cmd_buffer_data =
       FIND(struct command_buffer_data, commandBuffer);
-   cmd_buffer_data->stats.stats[OVERLAY_PARAM_ENABLED_dispatch]++;
    struct device_data *device_data = cmd_buffer_data->device;
    device_data->vtable.CmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
 }
@@ -2192,7 +2087,6 @@ static void overlay_CmdDispatchIndirect(
 {
    struct command_buffer_data *cmd_buffer_data =
       FIND(struct command_buffer_data, commandBuffer);
-   cmd_buffer_data->stats.stats[OVERLAY_PARAM_ENABLED_dispatch_indirect]++;
    struct device_data *device_data = cmd_buffer_data->device;
    device_data->vtable.CmdDispatchIndirect(commandBuffer, buffer, offset);
 }
@@ -2205,9 +2099,6 @@ static void overlay_CmdBindPipeline(
    struct command_buffer_data *cmd_buffer_data =
       FIND(struct command_buffer_data, commandBuffer);
    switch (pipelineBindPoint) {
-   case VK_PIPELINE_BIND_POINT_GRAPHICS: cmd_buffer_data->stats.stats[OVERLAY_PARAM_ENABLED_pipeline_graphics]++; break;
-   case VK_PIPELINE_BIND_POINT_COMPUTE: cmd_buffer_data->stats.stats[OVERLAY_PARAM_ENABLED_pipeline_compute]++; break;
-   case VK_PIPELINE_BIND_POINT_RAY_TRACING_NV: cmd_buffer_data->stats.stats[OVERLAY_PARAM_ENABLED_pipeline_raytracing]++; break;
    default: break;
    }
    struct device_data *device_data = cmd_buffer_data->device;
@@ -2221,8 +2112,6 @@ static VkResult overlay_BeginCommandBuffer(
    struct command_buffer_data *cmd_buffer_data =
       FIND(struct command_buffer_data, commandBuffer);
    struct device_data *device_data = cmd_buffer_data->device;
-
-   memset(&cmd_buffer_data->stats, 0, sizeof(cmd_buffer_data->stats));
 
    /* We don't record any query in secondary command buffers, just make sure
     * we have the right inheritance.
@@ -2320,8 +2209,6 @@ static VkResult overlay_ResetCommandBuffer(
       FIND(struct command_buffer_data, commandBuffer);
    struct device_data *device_data = cmd_buffer_data->device;
 
-   memset(&cmd_buffer_data->stats, 0, sizeof(cmd_buffer_data->stats));
-
    return device_data->vtable.ResetCommandBuffer(commandBuffer, flags);
 }
 
@@ -2333,15 +2220,6 @@ static void overlay_CmdExecuteCommands(
    struct command_buffer_data *cmd_buffer_data =
       FIND(struct command_buffer_data, commandBuffer);
    struct device_data *device_data = cmd_buffer_data->device;
-
-   /* Add the stats of the executed command buffers to the primary one. */
-   for (uint32_t c = 0; c < commandBufferCount; c++) {
-      struct command_buffer_data *sec_cmd_buffer_data =
-         FIND(struct command_buffer_data, pCommandBuffers[c]);
-
-      for (uint32_t s = 0; s < OVERLAY_PARAM_ENABLED_MAX; s++)
-         cmd_buffer_data->stats.stats[s] += sec_cmd_buffer_data->stats.stats[s];
-   }
 
    device_data->vtable.CmdExecuteCommands(commandBuffer, commandBufferCount, pCommandBuffers);
 }
@@ -2446,16 +2324,10 @@ static VkResult overlay_QueueSubmit(
    struct queue_data *queue_data = FIND(struct queue_data, queue);
    struct device_data *device_data = queue_data->device;
 
-   device_data->frame_stats.stats[OVERLAY_PARAM_ENABLED_submit]++;
-
    for (uint32_t s = 0; s < submitCount; s++) {
       for (uint32_t c = 0; c < pSubmits[s].commandBufferCount; c++) {
          struct command_buffer_data *cmd_buffer_data =
             FIND(struct command_buffer_data, pSubmits[s].pCommandBuffers[c]);
-
-         /* Merge the submitted command buffer stats into the device. */
-         for (uint32_t st = 0; st < OVERLAY_PARAM_ENABLED_MAX; st++)
-            device_data->frame_stats.stats[st] += cmd_buffer_data->stats.stats[st];
 
          /* Attach the command buffer to the queue so we remember to read its
           * pipeline statistics & timestamps at QueuePresent().

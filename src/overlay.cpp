@@ -84,7 +84,6 @@ struct queue_data {
    VkQueue queue;
    VkQueueFlags flags;
    uint32_t family_index;
-   uint64_t timestamp_mask;
 };
 
 struct overlay_draw {
@@ -295,7 +294,6 @@ static struct queue_data *new_queue_data(VkQueue queue,
    data->device = device_data;
    data->queue = queue;
    data->flags = family_props->queueFlags;
-   data->timestamp_mask = (1ull << family_props->timestampValidBits) - 1;
    data->family_index = family_index;
    map_object(HKEY(data->queue), data);
 

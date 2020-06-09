@@ -77,18 +77,6 @@ struct device_data {
    uint32_t n_queues;
 };
 
-/* Mapped from VkCommandBuffer */
-struct command_buffer_data {
-   struct device_data *device;
-
-   VkCommandBufferLevel level;
-
-   VkCommandBuffer cmd_buffer;
-   uint32_t query_index;
-
-   struct list_head link; /* link into queue_data::running_command_buffer */
-};
-
 /* Mapped from VkQueue */
 struct queue_data {
    struct device_data *device;
@@ -99,8 +87,6 @@ struct queue_data {
    uint64_t timestamp_mask;
 
    VkFence queries_fence;
-
-   struct list_head running_command_buffer;
 };
 
 struct overlay_draw {
@@ -251,38 +237,6 @@ static VkLayerDeviceCreateInfo *get_device_chain_info(const VkDeviceCreateInfo *
    return NULL;
 }
 
-static struct VkBaseOutStructure *
-clone_chain(const struct VkBaseInStructure *chain)
-{
-   struct VkBaseOutStructure *head = NULL, *tail = NULL;
-
-   vk_foreach_struct_const(item, chain) {
-      size_t item_size = vk_structure_type_size(item);
-      struct VkBaseOutStructure *new_item =
-         (struct VkBaseOutStructure *)malloc(item_size);;
-
-      memcpy(new_item, item, item_size);
-
-      if (!head)
-         head = new_item;
-      if (tail)
-         tail->pNext = new_item;
-      tail = new_item;
-   }
-
-   return head;
-}
-
-static void
-free_chain(struct VkBaseOutStructure *chain)
-{
-   while (chain) {
-      void *node = chain;
-      chain = chain->pNext;
-      free(node);
-   }
-}
-
 /**/
 
 static struct instance_data *new_instance_data(VkInstance instance)
@@ -345,7 +299,6 @@ static struct queue_data *new_queue_data(VkQueue queue,
    data->flags = family_props->queueFlags;
    data->timestamp_mask = (1ull << family_props->timestampValidBits) - 1;
    data->family_index = family_index;
-   list_inithead(&data->running_command_buffer);
    map_object(HKEY(data->queue), data);
 
    /* Fence synchronizing access to queries on that queue. */
@@ -417,29 +370,6 @@ static void device_unmap_queues(struct device_data *data)
 static void destroy_device_data(struct device_data *data)
 {
    unmap_object(HKEY(data->device));
-   ralloc_free(data);
-}
-
-/**/
-static struct command_buffer_data *new_command_buffer_data(VkCommandBuffer cmd_buffer,
-                                                           VkCommandBufferLevel level,
-                                                           uint32_t query_index,
-                                                           struct device_data *device_data)
-{
-   struct command_buffer_data *data = rzalloc(NULL, struct command_buffer_data);
-   data->device = device_data;
-   data->cmd_buffer = cmd_buffer;
-   data->level = level;
-   data->query_index = query_index;
-   list_inithead(&data->link);
-   map_object(HKEY(data->cmd_buffer), data);
-   return data;
-}
-
-static void destroy_command_buffer_data(struct command_buffer_data *data)
-{
-   unmap_object(HKEY(data->cmd_buffer));
-   list_delinit(&data->link);
    ralloc_free(data);
 }
 
@@ -1569,7 +1499,7 @@ static VkResult overlay_QueuePresentKHR(
    struct device_data *device_data = queue_data->device;
    struct instance_data *instance_data = device_data->instance;
 
-   if (list_length(&queue_data->running_command_buffer) > 0) {
+   if (0) {
       /* Before getting the query results, make sure the operations have
        * completed.
        */
@@ -1579,12 +1509,6 @@ static VkResult overlay_QueuePresentKHR(
       VK_CHECK(device_data->vtable.WaitForFences(device_data->device,
                                                  1, &queue_data->queries_fence,
                                                  VK_FALSE, UINT64_MAX));
-
-      /* Now get the results. */
-      list_for_each_entry_safe(struct command_buffer_data, cmd_buffer_data,
-                               &queue_data->running_command_buffer, link) {
-         list_delinit(&cmd_buffer_data->link);
-      }
    }
 
    /* Otherwise we need to add our overlay drawing semaphore to the list of
@@ -1650,130 +1574,6 @@ static VkResult overlay_QueuePresentKHR(
    return result;
 }
 
-static VkResult overlay_BeginCommandBuffer(
-    VkCommandBuffer                             commandBuffer,
-    const VkCommandBufferBeginInfo*             pBeginInfo)
-{
-   struct command_buffer_data *cmd_buffer_data =
-      FIND(struct command_buffer_data, commandBuffer);
-   struct device_data *device_data = cmd_buffer_data->device;
-
-   /* We don't record any query in secondary command buffers, just make sure
-    * we have the right inheritance.
-    */
-   if (cmd_buffer_data->level == VK_COMMAND_BUFFER_LEVEL_SECONDARY) {
-      VkCommandBufferBeginInfo *begin_info = (VkCommandBufferBeginInfo *)
-         clone_chain((const struct VkBaseInStructure *)pBeginInfo);
-      VkCommandBufferInheritanceInfo *parent_inhe_info = (VkCommandBufferInheritanceInfo *)
-         vk_find_struct(begin_info, COMMAND_BUFFER_INHERITANCE_INFO);
-      VkCommandBufferInheritanceInfo inhe_info = {
-         VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO,
-         NULL,
-         VK_NULL_HANDLE,
-         0,
-         VK_NULL_HANDLE,
-         VK_FALSE,
-         0,
-         overlay_query_flags,
-      };
-
-      if (parent_inhe_info)
-         parent_inhe_info->pipelineStatistics = overlay_query_flags;
-      else {
-         inhe_info.pNext = begin_info->pNext;
-         begin_info->pNext = &inhe_info;
-      }
-
-      VkResult result = device_data->vtable.BeginCommandBuffer(commandBuffer, pBeginInfo);
-
-      if (!parent_inhe_info)
-         begin_info->pNext = inhe_info.pNext;
-
-      free_chain((struct VkBaseOutStructure *)begin_info);
-
-      return result;
-   }
-
-   /* Otherwise record a begin query as first command. */
-   VkResult result = device_data->vtable.BeginCommandBuffer(commandBuffer, pBeginInfo);
-
-   return result;
-}
-
-static VkResult overlay_EndCommandBuffer(
-    VkCommandBuffer                             commandBuffer)
-{
-   struct command_buffer_data *cmd_buffer_data =
-      FIND(struct command_buffer_data, commandBuffer);
-   struct device_data *device_data = cmd_buffer_data->device;
-
-   return device_data->vtable.EndCommandBuffer(commandBuffer);
-}
-
-static VkResult overlay_ResetCommandBuffer(
-    VkCommandBuffer                             commandBuffer,
-    VkCommandBufferResetFlags                   flags)
-{
-   struct command_buffer_data *cmd_buffer_data =
-      FIND(struct command_buffer_data, commandBuffer);
-   struct device_data *device_data = cmd_buffer_data->device;
-
-   return device_data->vtable.ResetCommandBuffer(commandBuffer, flags);
-}
-
-static void overlay_CmdExecuteCommands(
-    VkCommandBuffer                             commandBuffer,
-    uint32_t                                    commandBufferCount,
-    const VkCommandBuffer*                      pCommandBuffers)
-{
-   struct command_buffer_data *cmd_buffer_data =
-      FIND(struct command_buffer_data, commandBuffer);
-   struct device_data *device_data = cmd_buffer_data->device;
-
-   device_data->vtable.CmdExecuteCommands(commandBuffer, commandBufferCount, pCommandBuffers);
-}
-
-static VkResult overlay_AllocateCommandBuffers(
-   VkDevice                           device,
-   const VkCommandBufferAllocateInfo* pAllocateInfo,
-   VkCommandBuffer*                   pCommandBuffers)
-{
-   struct device_data *device_data = FIND(struct device_data, device);
-   VkResult result =
-      device_data->vtable.AllocateCommandBuffers(device, pAllocateInfo, pCommandBuffers);
-   if (result != VK_SUCCESS)
-      return result;
-
-   for (uint32_t i = 0; i < pAllocateInfo->commandBufferCount; i++) {
-      new_command_buffer_data(pCommandBuffers[i], pAllocateInfo->level,
-                              i, device_data);
-   }
-
-   return result;
-}
-
-static void overlay_FreeCommandBuffers(
-   VkDevice               device,
-   VkCommandPool          commandPool,
-   uint32_t               commandBufferCount,
-   const VkCommandBuffer* pCommandBuffers)
-{
-   struct device_data *device_data = FIND(struct device_data, device);
-   for (uint32_t i = 0; i < commandBufferCount; i++) {
-      struct command_buffer_data *cmd_buffer_data =
-         FIND(struct command_buffer_data, pCommandBuffers[i]);
-
-      /* It is legal to free a NULL command buffer*/
-      if (!cmd_buffer_data)
-         continue;
-
-      destroy_command_buffer_data(cmd_buffer_data);
-   }
-
-   device_data->vtable.FreeCommandBuffers(device, commandPool,
-                                          commandBufferCount, pCommandBuffers);
-}
-
 static VkResult overlay_QueueSubmit(
     VkQueue                                     queue,
     uint32_t                                    submitCount,
@@ -1782,21 +1582,6 @@ static VkResult overlay_QueueSubmit(
 {
    struct queue_data *queue_data = FIND(struct queue_data, queue);
    struct device_data *device_data = queue_data->device;
-
-   for (uint32_t s = 0; s < submitCount; s++) {
-      for (uint32_t c = 0; c < pSubmits[s].commandBufferCount; c++) {
-         struct command_buffer_data *cmd_buffer_data =
-            FIND(struct command_buffer_data, pSubmits[s].pCommandBuffers[c]);
-
-         if (list_is_empty(&cmd_buffer_data->link)) {
-            list_addtail(&cmd_buffer_data->link,
-                         &queue_data->running_command_buffer);
-         } else {
-            fprintf(stderr, "Command buffer submitted multiple times before present.\n"
-                    "This could lead to invalid data.\n");
-         }
-      }
-   }
 
    return device_data->vtable.QueueSubmit(queue, submitCount, pSubmits, fence);
 }
@@ -1914,13 +1699,6 @@ static const struct {
    { "vkGetDeviceProcAddr", (void *) vkdto_vkGetDeviceProcAddr },
 #define ADD_HOOK(fn) { "vk" # fn, (void *) overlay_ ## fn }
 #define ADD_ALIAS_HOOK(alias, fn) { "vk" # alias, (void *) overlay_ ## fn }
-   ADD_HOOK(AllocateCommandBuffers),
-   ADD_HOOK(FreeCommandBuffers),
-   ADD_HOOK(ResetCommandBuffer),
-   ADD_HOOK(BeginCommandBuffer),
-   ADD_HOOK(EndCommandBuffer),
-   ADD_HOOK(CmdExecuteCommands),
-
    ADD_HOOK(CreateSwapchainKHR),
    ADD_HOOK(QueuePresentKHR),
    ADD_HOOK(DestroySwapchainKHR),

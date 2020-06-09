@@ -84,8 +84,6 @@ struct command_buffer_data {
    VkCommandBufferLevel level;
 
    VkCommandBuffer cmd_buffer;
-   VkQueryPool pipeline_query_pool;
-   VkQueryPool timestamp_query_pool;
    uint32_t query_index;
 
    struct list_head link; /* link into queue_data::running_command_buffer */
@@ -436,8 +434,6 @@ static void destroy_device_data(struct device_data *data)
 /**/
 static struct command_buffer_data *new_command_buffer_data(VkCommandBuffer cmd_buffer,
                                                            VkCommandBufferLevel level,
-                                                           VkQueryPool pipeline_query_pool,
-                                                           VkQueryPool timestamp_query_pool,
                                                            uint32_t query_index,
                                                            struct device_data *device_data)
 {
@@ -445,8 +441,6 @@ static struct command_buffer_data *new_command_buffer_data(VkCommandBuffer cmd_b
    data->device = device_data;
    data->cmd_buffer = cmd_buffer;
    data->level = level;
-   data->pipeline_query_pool = pipeline_query_pool;
-   data->timestamp_query_pool = timestamp_query_pool;
    data->query_index = query_index;
    list_inithead(&data->link);
    map_object(HKEY(data->cmd_buffer), data);
@@ -1621,7 +1615,6 @@ static VkResult overlay_QueuePresentKHR(
    struct queue_data *queue_data = FIND(struct queue_data, queue);
    struct device_data *device_data = queue_data->device;
    struct instance_data *instance_data = device_data->instance;
-   uint32_t query_results[OVERLAY_QUERY_COUNT];
 
    if (list_length(&queue_data->running_command_buffer) > 0) {
       /* Before getting the query results, make sure the operations have
@@ -1638,26 +1631,6 @@ static VkResult overlay_QueuePresentKHR(
       list_for_each_entry_safe(struct command_buffer_data, cmd_buffer_data,
                                &queue_data->running_command_buffer, link) {
          list_delinit(&cmd_buffer_data->link);
-
-         if (cmd_buffer_data->pipeline_query_pool) {
-            memset(query_results, 0, sizeof(query_results));
-            VK_CHECK(device_data->vtable.GetQueryPoolResults(device_data->device,
-                                                             cmd_buffer_data->pipeline_query_pool,
-                                                             cmd_buffer_data->query_index, 1,
-                                                             sizeof(uint32_t) * OVERLAY_QUERY_COUNT,
-                                                             query_results, 0, VK_QUERY_RESULT_WAIT_BIT));
-         }
-         if (cmd_buffer_data->timestamp_query_pool) {
-            uint64_t gpu_timestamps[2] = { 0 };
-            VK_CHECK(device_data->vtable.GetQueryPoolResults(device_data->device,
-                                                             cmd_buffer_data->timestamp_query_pool,
-                                                             cmd_buffer_data->query_index * 2, 2,
-                                                             2 * sizeof(uint64_t), gpu_timestamps, sizeof(uint64_t),
-                                                             VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT));
-
-            gpu_timestamps[0] &= queue_data->timestamp_mask;
-            gpu_timestamps[1] &= queue_data->timestamp_mask;
-         }
       }
    }
 
@@ -1771,30 +1744,6 @@ static VkResult overlay_BeginCommandBuffer(
    /* Otherwise record a begin query as first command. */
    VkResult result = device_data->vtable.BeginCommandBuffer(commandBuffer, pBeginInfo);
 
-   if (result == VK_SUCCESS) {
-      if (cmd_buffer_data->pipeline_query_pool) {
-         device_data->vtable.CmdResetQueryPool(commandBuffer,
-                                               cmd_buffer_data->pipeline_query_pool,
-                                               cmd_buffer_data->query_index, 1);
-      }
-      if (cmd_buffer_data->timestamp_query_pool) {
-         device_data->vtable.CmdResetQueryPool(commandBuffer,
-                                               cmd_buffer_data->timestamp_query_pool,
-                                               cmd_buffer_data->query_index * 2, 2);
-      }
-      if (cmd_buffer_data->pipeline_query_pool) {
-         device_data->vtable.CmdBeginQuery(commandBuffer,
-                                           cmd_buffer_data->pipeline_query_pool,
-                                           cmd_buffer_data->query_index, 0);
-      }
-      if (cmd_buffer_data->timestamp_query_pool) {
-         device_data->vtable.CmdWriteTimestamp(commandBuffer,
-                                               VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                                               cmd_buffer_data->timestamp_query_pool,
-                                               cmd_buffer_data->query_index * 2);
-      }
-   }
-
    return result;
 }
 
@@ -1804,18 +1753,6 @@ static VkResult overlay_EndCommandBuffer(
    struct command_buffer_data *cmd_buffer_data =
       FIND(struct command_buffer_data, commandBuffer);
    struct device_data *device_data = cmd_buffer_data->device;
-
-   if (cmd_buffer_data->timestamp_query_pool) {
-      device_data->vtable.CmdWriteTimestamp(commandBuffer,
-                                            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                                            cmd_buffer_data->timestamp_query_pool,
-                                            cmd_buffer_data->query_index * 2 + 1);
-   }
-   if (cmd_buffer_data->pipeline_query_pool) {
-      device_data->vtable.CmdEndQuery(commandBuffer,
-                                      cmd_buffer_data->pipeline_query_pool,
-                                      cmd_buffer_data->query_index);
-   }
 
    return device_data->vtable.EndCommandBuffer(commandBuffer);
 }
@@ -1854,31 +1791,10 @@ static VkResult overlay_AllocateCommandBuffers(
    if (result != VK_SUCCESS)
       return result;
 
-   VkQueryPool pipeline_query_pool = VK_NULL_HANDLE;
-   VkQueryPool timestamp_query_pool = VK_NULL_HANDLE;
-   if (device_data->instance->params.enabled[OVERLAY_PARAM_ENABLED_gpu_timing]) {
-      VkQueryPoolCreateInfo pool_info = {
-         VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
-         NULL,
-         0,
-         VK_QUERY_TYPE_TIMESTAMP,
-         pAllocateInfo->commandBufferCount * 2,
-         0,
-      };
-      VK_CHECK(device_data->vtable.CreateQueryPool(device_data->device, &pool_info,
-                                                   NULL, &timestamp_query_pool));
-   }
-
    for (uint32_t i = 0; i < pAllocateInfo->commandBufferCount; i++) {
       new_command_buffer_data(pCommandBuffers[i], pAllocateInfo->level,
-                              pipeline_query_pool, timestamp_query_pool,
                               i, device_data);
    }
-
-   if (pipeline_query_pool)
-      map_object(HKEY(pipeline_query_pool), (void *)(uintptr_t) pAllocateInfo->commandBufferCount);
-   if (timestamp_query_pool)
-      map_object(HKEY(timestamp_query_pool), (void *)(uintptr_t) pAllocateInfo->commandBufferCount);
 
    return result;
 }
@@ -1898,22 +1814,6 @@ static void overlay_FreeCommandBuffers(
       if (!cmd_buffer_data)
          continue;
 
-      uint64_t count = (uintptr_t)find_object_data(HKEY(cmd_buffer_data->pipeline_query_pool));
-      if (count == 1) {
-         unmap_object(HKEY(cmd_buffer_data->pipeline_query_pool));
-         device_data->vtable.DestroyQueryPool(device_data->device,
-                                              cmd_buffer_data->pipeline_query_pool, NULL);
-      } else if (count != 0) {
-         map_object(HKEY(cmd_buffer_data->pipeline_query_pool), (void *)(uintptr_t)(count - 1));
-      }
-      count = (uintptr_t)find_object_data(HKEY(cmd_buffer_data->timestamp_query_pool));
-      if (count == 1) {
-         unmap_object(HKEY(cmd_buffer_data->timestamp_query_pool));
-         device_data->vtable.DestroyQueryPool(device_data->device,
-                                              cmd_buffer_data->timestamp_query_pool, NULL);
-      } else if (count != 0) {
-         map_object(HKEY(cmd_buffer_data->timestamp_query_pool), (void *)(uintptr_t)(count - 1));
-      }
       destroy_command_buffer_data(cmd_buffer_data);
    }
 
@@ -1934,13 +1834,6 @@ static VkResult overlay_QueueSubmit(
       for (uint32_t c = 0; c < pSubmits[s].commandBufferCount; c++) {
          struct command_buffer_data *cmd_buffer_data =
             FIND(struct command_buffer_data, pSubmits[s].pCommandBuffers[c]);
-
-         /* Attach the command buffer to the queue so we remember to read its
-          * pipeline statistics & timestamps at QueuePresent().
-          */
-         if (!cmd_buffer_data->pipeline_query_pool &&
-             !cmd_buffer_data->timestamp_query_pool)
-            continue;
 
          if (list_is_empty(&cmd_buffer_data->link)) {
             list_addtail(&cmd_buffer_data->link,

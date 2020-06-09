@@ -160,17 +160,6 @@ struct swapchain_data {
    /**/
    ImGuiContext* imgui_context;
    ImVec2 window_size;
-
-   /**/
-   uint64_t n_frames;
-   uint64_t last_present_time;
-
-   unsigned n_frames_since_update;
-   uint64_t last_fps_update;
-   double fps;
-
-   enum overlay_param_enabled stat_selector;
-   double time_dividor;
 };
 
 static const VkQueryPipelineStatisticFlags overlay_query_flags =
@@ -520,40 +509,6 @@ struct overlay_draw *get_overlay_draw(struct swapchain_data *data)
    list_addtail(&draw->link, &data->draws);
 
    return draw;
-}
-
-static void snapshot_swapchain_frame(struct swapchain_data *data)
-{
-   struct device_data *device_data = data->device;
-   struct instance_data *instance_data = device_data->instance;
-   uint64_t now = os_time_get(); /* us */
-
-   /* If capture has been enabled but it hasn't started yet, it means we are on
-    * the first snapshot after it has been enabled. At this point we want to
-    * use the stats captured so far to update the display, but we don't want
-    * this data to cause noise to the stats that we want to capture from now
-    * on.
-    *
-    * capture_begin == true will trigger an update of the fps on display, and a
-    * flush of the data, but no stats will be written to the output file. This
-    * way, we will have only stats from after the capture has been enabled
-    * written to the output_file.
-    */
-
-   if (data->last_fps_update) {
-      double elapsed = (double)(now - data->last_fps_update); /* us */
-      if (elapsed >= instance_data->params.fps_sampling_period) {
-         data->fps = 1000000.0f * data->n_frames_since_update / elapsed;
-         data->n_frames_since_update = 0;
-         data->last_fps_update = now;
-      }
-   } else {
-      data->last_fps_update = now;
-   }
-
-   data->last_present_time = now;
-   data->n_frames++;
-   data->n_frames_since_update++;
 }
 
 static void position_layer(struct swapchain_data *data)
@@ -1568,9 +1523,7 @@ static struct overlay_draw *before_present(struct swapchain_data *swapchain_data
    struct instance_data *instance_data = swapchain_data->device->instance;
    struct overlay_draw *draw = NULL;
 
-   snapshot_swapchain_frame(swapchain_data);
-
-   if (!instance_data->params.no_display && swapchain_data->n_frames > 0) {
+   if (!instance_data->params.no_display) {
       compute_swapchain_display(swapchain_data);
       draw = render_swapchain_display(swapchain_data, present_queue,
                                       wait_semaphores, n_wait_semaphores,

@@ -59,12 +59,6 @@ struct instance_data {
    bool first_line_printed;
 
    int control_client;
-
-   /* Dumping of frame stats to a file has been enabled. */
-   bool capture_enabled;
-
-   /* Dumping of frame stats to a file has been enabled and started. */
-   bool capture_started;
 };
 
 /* Mapped from VkDevice */
@@ -554,23 +548,6 @@ static const char *param_unit(enum overlay_param_enabled param)
    }
 }
 
-static void parse_command(struct instance_data *instance_data,
-                          const char *cmd, unsigned cmdlen,
-                          const char *param, unsigned paramlen)
-{
-   if (!strncmp(cmd, "capture", cmdlen)) {
-      int value = atoi(param);
-      bool enabled = value > 0;
-
-      if (enabled) {
-         instance_data->capture_enabled = true;
-      } else {
-         instance_data->capture_enabled = false;
-         instance_data->capture_started = false;
-      }
-   }
-}
-
 #define BUFSIZE 4096
 
 /**
@@ -602,9 +579,6 @@ static void process_char(struct instance_data *instance_data, char c)
    case ';':
       if (!reading_cmd)
          break;
-      cmd[cmdpos++] = '\0';
-      param[parampos++] = '\0';
-      parse_command(instance_data, cmd, cmdpos, param, parampos);
       reading_cmd = false;
       reading_param = false;
       break;
@@ -774,43 +748,13 @@ static void snapshot_swapchain_frame(struct swapchain_data *data)
     * way, we will have only stats from after the capture has been enabled
     * written to the output_file.
     */
-   const bool capture_begin =
-      instance_data->capture_enabled && !instance_data->capture_started;
 
    if (data->last_fps_update) {
       double elapsed = (double)(now - data->last_fps_update); /* us */
-      if (capture_begin ||
-          elapsed >= instance_data->params.fps_sampling_period) {
+      if (elapsed >= instance_data->params.fps_sampling_period) {
          data->fps = 1000000.0f * data->n_frames_since_update / elapsed;
-         if (instance_data->capture_started) {
-            if (!instance_data->first_line_printed) {
-               bool first_column = true;
-
-               instance_data->first_line_printed = true;
-
-#define OVERLAY_PARAM_BOOL(name) \
-               if (instance_data->params.enabled[OVERLAY_PARAM_ENABLED_##name]) { \
-                  fprintf(instance_data->params.output_file, \
-                          "%s%s%s", first_column ? "" : ", ", #name, \
-                          param_unit(OVERLAY_PARAM_ENABLED_##name)); \
-                  first_column = false; \
-               }
-#define OVERLAY_PARAM_CUSTOM(name)
-               OVERLAY_PARAMS
-#undef OVERLAY_PARAM_BOOL
-#undef OVERLAY_PARAM_CUSTOM
-               fprintf(instance_data->params.output_file, "\n");
-            }
-
-            fprintf(instance_data->params.output_file, "\n");
-            fflush(instance_data->params.output_file);
-         }
-
          data->n_frames_since_update = 0;
          data->last_fps_update = now;
-
-         if (capture_begin)
-            instance_data->capture_started = true;
       }
    } else {
       data->last_fps_update = now;
@@ -2354,9 +2298,6 @@ static VkResult overlay_CreateInstance(
    /* If there's no control file, and an output_file was specified, start
     * capturing fps data right away.
     */
-   instance_data->capture_enabled =
-      instance_data->params.output_file && instance_data->params.control < 0;
-   instance_data->capture_started = instance_data->capture_enabled;
 
    for (int i = OVERLAY_PARAM_ENABLED_vertices;
         i <= OVERLAY_PARAM_ENABLED_compute_invocations; i++) {

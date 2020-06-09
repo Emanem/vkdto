@@ -12,10 +12,10 @@
          "vkGetDeviceProcAddr": "vkdto_vkGetDeviceProcAddr"
       },
       "enable_environment": {
-        "VKDTOHUD": "1"
+        "VKDTO_HUD": "1"
       },
       "disable_environment": {
-        "DISABLE_VKDTOHUD": "1"
+        "DISABLE_VKDTO_HUD": "1"
       }
     }
 }

@@ -26,7 +26,13 @@
 #include <assert.h>
 #include <wchar.h>
 #include <iconv.h>
-#include <string>
+#include <atomic>
+#include <thread>
+#include <vector>
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
@@ -941,8 +947,47 @@ namespace {
 		return rv;
 	}
 
+	std::atomic<wchar_t*>	data_buffer(0);
+
+	void th_data_load(void) {
+		static const char	*env_filename = "VKDTO_FILE",
+			     		*f_name = std::getenv(env_filename);
+		static const size_t	ms_sleep = 250,
+			     		BUF_SZ = 1024*4;
+
+		std::vector<wchar_t>	bufs[2];
+		bufs[0].resize(BUF_SZ);
+		bufs[1].resize(BUF_SZ);
+
+		// I know this may suffer from 'tearing' :)
+		size_t			cur_idx = 0;
+		do {
+			const size_t	next_idx = (cur_idx+1)%(sizeof(bufs)/sizeof(bufs[0]));
+			std::swprintf(&bufs[next_idx][0], BUF_SZ, L"Couldn't load contents of '%s'.\nPlease check variable 'VKDTO_FILE' refers\nto a valid file", (f_name) ? f_name : "");
+			if(f_name) {
+				int	fd = open(f_name, O_RDONLY);
+				if(-1 != fd) {
+					// read as much as we can
+					const auto	rb = read(fd, (char*)&bufs[next_idx][0], (BUF_SZ - 1)*sizeof(wchar_t));
+					if(rb >= (ssize_t)sizeof(wchar_t)) {
+						// data should be wchar_t divisible
+						// but we truncate anyway
+						const auto	last_wchar = (rb/sizeof(wchar_t) > 0) ? rb/sizeof(wchar_t) : 0;
+						bufs[next_idx][last_wchar] = L'\0';
+					}
+					close(fd);
+				}
+			}
+			data_buffer.store(&bufs[next_idx][0]);
+			cur_idx = next_idx;
+			// sleep for a bit
+			struct timespec	ts = { ms_sleep/1000, (ms_sleep%1000)*1000000 };
+			nanosleep(&ts, 0);
+		} while(true);
+	}
+
 	const wchar_t* sample_data(ImVec2& out) {
-		static const wchar_t	data[] = 
+		static const wchar_t	data__[] = 
 		L"linux-hunter 0.0.7              (1001/   0/   0 w/u/s)\n"
 		"SessionId:[Pc8Ec&JMnaQ2] Host:[Emetta]\n"
 		"\n"
@@ -958,7 +1003,15 @@ namespace {
 		"Fulgur Anjanath                   43884/ 48796   89.93\n"
 		"Banbaro                           41945/ 42126   99.57";
 
-		const wchar_t	*cur_data = data,
+		static std::atomic<bool>	first_run(true);
+		bool				exp_val = true;
+		if(first_run.compare_exchange_strong(exp_val, false)) {
+			std::thread	t1(th_data_load);
+			t1.detach();
+		}
+
+		const wchar_t	*data = (data_buffer.load()) ? data_buffer.load() : data__,
+				*cur_data = data,
 				*next_line = wcschr(cur_data, L'\n');
 		out.x = 0.0;
 		out.y = 1.0;

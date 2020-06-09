@@ -1549,18 +1549,6 @@ static VkResult overlay_QueuePresentKHR(
    return result;
 }
 
-static VkResult overlay_QueueSubmit(
-    VkQueue                                     queue,
-    uint32_t                                    submitCount,
-    const VkSubmitInfo*                         pSubmits,
-    VkFence                                     fence)
-{
-   struct queue_data *queue_data = FIND(struct queue_data, queue);
-   struct device_data *device_data = queue_data->device;
-
-   return device_data->vtable.QueueSubmit(queue, submitCount, pSubmits, fence);
-}
-
 static VkResult overlay_CreateDevice(
     VkPhysicalDevice                            physicalDevice,
     const VkDeviceCreateInfo*                   pCreateInfo,
@@ -1677,8 +1665,6 @@ static const struct {
    ADD_HOOK(CreateSwapchainKHR),
    ADD_HOOK(QueuePresentKHR),
    ADD_HOOK(DestroySwapchainKHR),
-
-   ADD_HOOK(QueueSubmit),
 
    ADD_HOOK(CreateDevice),
    ADD_HOOK(DestroyDevice),

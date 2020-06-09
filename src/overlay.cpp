@@ -36,7 +36,6 @@
 #include "hash_table.h"
 #include "list.h"
 #include "ralloc.h"
-#include "os_time.h"
 #include "os_socket.h"
 #include "simple_mtx.h"
 

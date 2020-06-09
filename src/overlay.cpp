@@ -31,13 +31,8 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
 
-//#include "git_sha1.h"
-
 #include "imgui.h"
-
 #include "overlay_params.h"
-
-#include "debug.h"
 #include "hash_table.h"
 #include "list.h"
 #include "ralloc.h"

@@ -85,8 +85,6 @@ struct queue_data {
    VkQueueFlags flags;
    uint32_t family_index;
    uint64_t timestamp_mask;
-
-   VkFence queries_fence;
 };
 
 struct overlay_draw {
@@ -301,15 +299,6 @@ static struct queue_data *new_queue_data(VkQueue queue,
    data->family_index = family_index;
    map_object(HKEY(data->queue), data);
 
-   /* Fence synchronizing access to queries on that queue. */
-   VkFenceCreateInfo fence_info = {};
-   fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-   fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-   VK_CHECK(device_data->vtable.CreateFence(device_data->device,
-                                            &fence_info,
-                                            NULL,
-                                            &data->queries_fence));
-
    if (data->flags & VK_QUEUE_GRAPHICS_BIT)
       device_data->graphic_queue = data;
 
@@ -318,8 +307,6 @@ static struct queue_data *new_queue_data(VkQueue queue,
 
 static void destroy_queue(struct queue_data *data)
 {
-   struct device_data *device_data = data->device;
-   device_data->vtable.DestroyFence(device_data->device, data->queries_fence, NULL);
    unmap_object(HKEY(data->queue));
    ralloc_free(data);
 }
@@ -1498,18 +1485,6 @@ static VkResult overlay_QueuePresentKHR(
    struct queue_data *queue_data = FIND(struct queue_data, queue);
    struct device_data *device_data = queue_data->device;
    struct instance_data *instance_data = device_data->instance;
-
-   if (0) {
-      /* Before getting the query results, make sure the operations have
-       * completed.
-       */
-      VK_CHECK(device_data->vtable.ResetFences(device_data->device,
-                                               1, &queue_data->queries_fence));
-      VK_CHECK(device_data->vtable.QueueSubmit(queue, 0, NULL, queue_data->queries_fence));
-      VK_CHECK(device_data->vtable.WaitForFences(device_data->device,
-                                                 1, &queue_data->queries_fence,
-                                                 VK_FALSE, UINT64_MAX));
-   }
 
    /* Otherwise we need to add our overlay drawing semaphore to the list of
     * semaphores to wait on. If we don't do that the presented picture might

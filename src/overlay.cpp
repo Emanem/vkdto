@@ -54,7 +54,6 @@ struct instance_data {
    VkInstance instance;
 
    struct overlay_params params;
-   bool pipeline_statistics_enabled;
 
    bool first_line_printed;
 };
@@ -1887,19 +1886,6 @@ static VkResult overlay_AllocateCommandBuffers(
 
    VkQueryPool pipeline_query_pool = VK_NULL_HANDLE;
    VkQueryPool timestamp_query_pool = VK_NULL_HANDLE;
-   if (device_data->instance->pipeline_statistics_enabled &&
-       pAllocateInfo->level == VK_COMMAND_BUFFER_LEVEL_PRIMARY) {
-      VkQueryPoolCreateInfo pool_info = {
-         VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
-         NULL,
-         0,
-         VK_QUERY_TYPE_PIPELINE_STATISTICS,
-         pAllocateInfo->commandBufferCount,
-         overlay_query_flags,
-      };
-      VK_CHECK(device_data->vtable.CreateQueryPool(device_data->device, &pool_info,
-                                                   NULL, &pipeline_query_pool));
-   }
    if (device_data->instance->params.enabled[OVERLAY_PARAM_ENABLED_gpu_timing]) {
       VkQueryPoolCreateInfo pool_info = {
          VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
@@ -2026,10 +2012,6 @@ static VkResult overlay_CreateDevice(
 
    if (pCreateInfo->pEnabledFeatures)
       device_features = *(pCreateInfo->pEnabledFeatures);
-   if (instance_data->pipeline_statistics_enabled) {
-      device_features.inheritedQueries = true;
-      device_features.pipelineStatisticsQuery = true;
-   }
    device_info.pEnabledFeatures = &device_features;
 
 
@@ -2092,18 +2074,6 @@ static VkResult overlay_CreateInstance(
    instance_data_map_physical_devices(instance_data, true);
 
    parse_overlay_env(&instance_data->params, getenv("VK_LAYER_MESA_OVERLAY_CONFIG"));
-
-   /* If there's no control file, and an output_file was specified, start
-    * capturing fps data right away.
-    */
-
-   for (int i = OVERLAY_PARAM_ENABLED_vertices;
-        i <= OVERLAY_PARAM_ENABLED_compute_invocations; i++) {
-      if (instance_data->params.enabled[i]) {
-         instance_data->pipeline_statistics_enabled = true;
-         break;
-      }
-   }
 
    return result;
 }

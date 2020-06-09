@@ -1724,36 +1724,6 @@ static VkResult overlay_QueuePresentKHR(
    return result;
 }
 
-static VkResult overlay_AcquireNextImageKHR(
-    VkDevice                                    device,
-    VkSwapchainKHR                              swapchain,
-    uint64_t                                    timeout,
-    VkSemaphore                                 semaphore,
-    VkFence                                     fence,
-    uint32_t*                                   pImageIndex)
-{
-   struct swapchain_data *swapchain_data =
-      FIND(struct swapchain_data, swapchain);
-   struct device_data *device_data = swapchain_data->device;
-
-   VkResult result = device_data->vtable.AcquireNextImageKHR(device, swapchain, timeout,
-                                                             semaphore, fence, pImageIndex);
-   return result;
-}
-
-static VkResult overlay_AcquireNextImage2KHR(
-    VkDevice                                    device,
-    const VkAcquireNextImageInfoKHR*            pAcquireInfo,
-    uint32_t*                                   pImageIndex)
-{
-   struct swapchain_data *swapchain_data =
-      FIND(struct swapchain_data, pAcquireInfo->swapchain);
-   struct device_data *device_data = swapchain_data->device;
-
-   VkResult result = device_data->vtable.AcquireNextImage2KHR(device, pAcquireInfo, pImageIndex);
-   return result;
-}
-
 static VkResult overlay_BeginCommandBuffer(
     VkCommandBuffer                             commandBuffer,
     const VkCommandBufferBeginInfo*             pBeginInfo)
@@ -2108,8 +2078,6 @@ static const struct {
    ADD_HOOK(CreateSwapchainKHR),
    ADD_HOOK(QueuePresentKHR),
    ADD_HOOK(DestroySwapchainKHR),
-   ADD_HOOK(AcquireNextImageKHR),
-   ADD_HOOK(AcquireNextImage2KHR),
 
    ADD_HOOK(QueueSubmit),
 

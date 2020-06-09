@@ -36,7 +36,6 @@
 #include "hash_table.h"
 #include "list.h"
 #include "ralloc.h"
-#include "os_socket.h"
 #include "simple_mtx.h"
 
 #include "vk_enum_to_str.h"

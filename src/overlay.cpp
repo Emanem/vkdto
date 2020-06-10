@@ -1047,7 +1047,7 @@ namespace {
 				b = next_esc+2;
 				next_esc = wcschr(b, ESC_CHAR);
 			}
-			if(b > e) {
+			if(e > b) {
 				rv += e-b;
 				ImGui::Text("%s", to_utf8(b, e).c_str());
 			}

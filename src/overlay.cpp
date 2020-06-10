@@ -1027,6 +1027,11 @@ namespace {
 			ssize_t			rv = 0;
 			const wchar_t*		next_esc = wcschr(b, ESC_CHAR);
 
+			if(e == b) {
+				ImGui::Text("");
+				return 0;
+			}
+
 			while(next_esc && (next_esc < e)) {
 				// print what is between b and next_esc (reset the line)
 				ImGui::Text("%s", to_utf8(b, next_esc).c_str()); ImGui::SameLine(0.0f, 0.0f);

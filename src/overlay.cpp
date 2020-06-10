@@ -182,6 +182,8 @@ struct swapchain_data {
    VkDeviceMemory font_mem;
    VkBuffer upload_font_buffer;
    VkDeviceMemory upload_font_buffer_mem;
+   ImFont *ubuntu_mon_reg,
+	  *ubuntu_mon_bold;
 
    /**/
    ImGuiContext* imgui_context;
@@ -928,7 +930,23 @@ static void position_layer(struct swapchain_data *data)
    }
 }
 
-namespace {
+namespace vkdto {
+	namespace opt {
+		const char	*input_file = 0;
+		size_t		buf_sz = 1024*4;
+		int		ms_update_wait = 250;
+		float		font_size = 15.0;
+	}
+
+	void load_opt(void) {
+		static std::atomic<bool>	first_run(true);
+		bool				exp_val = true;
+		if(!first_run || !first_run.compare_exchange_strong(exp_val, false))
+			return;
+
+		opt::input_file = std::getenv("VKDTO_FILE");
+	}
+
 	std::string to_utf8(const wchar_t* beg, const wchar_t* end) {
 		const size_t	bytes_sz = 4*(end-beg);
 		std::string	rv;
@@ -950,25 +968,22 @@ namespace {
 	std::atomic<wchar_t*>	data_buffer(0);
 
 	void th_data_load(void) {
-		static const char	*env_filename = "VKDTO_FILE",
-			     		*f_name = std::getenv(env_filename);
-		static const size_t	ms_sleep = 250,
-			     		BUF_SZ = 1024*4;
-
 		std::vector<wchar_t>	bufs[2];
-		bufs[0].resize(BUF_SZ);
-		bufs[1].resize(BUF_SZ);
+		bufs[0].resize(opt::buf_sz);
+		bufs[1].resize(opt::buf_sz);
 
 		// I know this may suffer from 'tearing' :)
 		size_t			cur_idx = 0;
 		do {
 			const size_t	next_idx = (cur_idx+1)%(sizeof(bufs)/sizeof(bufs[0]));
-			std::swprintf(&bufs[next_idx][0], BUF_SZ, L"Couldn't load contents of '%s'.\nPlease check variable 'VKDTO_FILE' refers\nto a valid file", (f_name) ? f_name : "");
-			if(f_name) {
-				int	fd = open(f_name, O_RDONLY);
+			std::swprintf(&bufs[next_idx][0], opt::buf_sz,
+					L"Couldn't load contents of '%s'.\nPlease check variable 'VKDTO_FILE' refers to a valid file",
+					(opt::input_file) ? opt::input_file : "");
+			if(opt::input_file) {
+				int	fd = open(opt::input_file, O_RDONLY);
 				if(-1 != fd) {
 					// read as much as we can
-					const auto	rb = read(fd, (char*)&bufs[next_idx][0], (BUF_SZ - 1)*sizeof(wchar_t));
+					const auto	rb = read(fd, (char*)&bufs[next_idx][0], (opt::buf_sz - 1)*sizeof(wchar_t));
 					if(rb >= (ssize_t)sizeof(wchar_t)) {
 						// data should be wchar_t divisible
 						// but we truncate anyway
@@ -981,7 +996,7 @@ namespace {
 			data_buffer.store(&bufs[next_idx][0]);
 			cur_idx = next_idx;
 			// sleep for a bit
-			struct timespec	ts = { ms_sleep/1000, (ms_sleep%1000)*1000000 };
+			struct timespec	ts = { opt::ms_update_wait/1000, (opt::ms_update_wait%1000)*1000000 };
 			nanosleep(&ts, 0);
 		} while(true);
 	}
@@ -1005,7 +1020,7 @@ namespace {
 
 		static std::atomic<bool>	first_run(true);
 		bool				exp_val = true;
-		if(first_run.compare_exchange_strong(exp_val, false)) {
+		if(first_run && first_run.compare_exchange_strong(exp_val, false)) {
 			std::thread	t1(th_data_load);
 			t1.detach();
 		}
@@ -1017,8 +1032,13 @@ namespace {
 
 	// returns the max number of chars written
 	// for any row
-	size_t draw_data(const wchar_t* data) {
-		size_t		rv = 0;
+	struct rect2s {
+		size_t	x,
+			y;
+	};
+
+	rect2s draw_data(const wchar_t* data) {
+		rect2s		rv = {0, 1};
 		const wchar_t	*cur_data = data,
 				*next_line = wcschr(cur_data, L'\n');
 
@@ -1028,7 +1048,7 @@ namespace {
 			const wchar_t*		next_esc = wcschr(b, ESC_CHAR);
 
 			if(e == b) {
-				ImGui::Text("");
+				ImGui::Text("%s", "");
 				return 0;
 			}
 
@@ -1054,20 +1074,23 @@ namespace {
 			}
 			if(e > b) {
 				rv += e-b;
-				ImGui::Text("%s", to_utf8(b, e).c_str());
+				ImGui::Text("%s", to_utf8(b, e).c_str()); ImGui::SameLine(0.0f, 0.0f);
 			}
+			// no matter what happens, print a newline...
+			ImGui::Text("%s", "");
 			return rv;
 		};
 
 		while(next_line) {
 			const auto	cur_rv = fn_print_row(cur_data, next_line);
-			if(cur_rv > rv) rv = cur_rv;
+			if(cur_rv > rv.x) rv.x = cur_rv;
 			cur_data = next_line+1;
 			next_line = wcschr(cur_data, L'\n');
+			rv.y += 1;
 		}
 		const auto	sz_left = wcslen(cur_data);
 		const auto	last_rv = fn_print_row(cur_data, cur_data + sz_left);
-		if(last_rv > rv) rv = last_rv;
+		if(last_rv > rv.x) rv.x = last_rv;
 
 		return rv;
 	}
@@ -1080,14 +1103,22 @@ static void compute_swapchain_display(struct swapchain_data *data)
 
    ImGui::SetCurrentContext(data->imgui_context);
    ImGui::NewFrame();
+   // setup basic font and spacing
+   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+   ImGui::PushFont(data->ubuntu_mon_reg);
    position_layer(data);
-   ImGui::Begin("vkdto");
+   ImGui::Begin("vkdto", 0, ImGuiWindowFlags_NoDecoration);
 
-   const wchar_t	*cur_data = sample_data();
-   const auto		max_row = draw_data(cur_data);
+   vkdto::load_opt();
+   const wchar_t	*cur_data = vkdto::sample_data();
+   const auto		rc = vkdto::draw_data(cur_data);
 
-   data->window_size = ImVec2(max_row*8.0f, ImGui::GetCursorPosY() + 10.0f);
+   data->window_size = ImVec2(5.3f*vkdto::opt::font_size*0.1f*rc.x, ImGui::GetTextLineHeightWithSpacing()*(rc.y+1));
    ImGui::End();
+   ImGui::PopFont();
+   ImGui::PopStyleVar();
+   ImGui::EndFrame();
+   ImGui::Render();
 
    /*ImGui::Begin("Mesa overlay");
    ImGui::Text("Device: %s", device_data->properties.deviceName);
@@ -1157,8 +1188,6 @@ static void compute_swapchain_display(struct swapchain_data *data)
    }
    data->window_size = ImVec2(data->window_size.x, ImGui::GetCursorPosY() + 10.0f);
    ImGui::End();*/
-   ImGui::EndFrame();
-   ImGui::Render();
 }
 
 static uint32_t vk_memory_type(struct device_data *data,
@@ -1771,6 +1800,19 @@ static void setup_swapchain_data_pipeline(struct swapchain_data *data)
    ImGuiIO& io = ImGui::GetIO();
    unsigned char* pixels;
    int width, height;
+   // load fonts here
+   const static ImWchar	ALL_RANGES[] = {
+   	0x0020, 0xFFFF,
+	0
+   };
+   if(!data->ubuntu_mon_reg) {
+   	data->ubuntu_mon_reg = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf", vkdto::opt::font_size, 0, ALL_RANGES);
+	assert(data->ubuntu_mon_reg);
+   }
+   if(!data->ubuntu_mon_bold) {
+   	data->ubuntu_mon_bold = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/ubuntu/UbuntuMono-B.ttf", vkdto::opt::font_size, 0, ALL_RANGES);
+	assert(data->ubuntu_mon_bold);
+   }
    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 
    /* Font image */

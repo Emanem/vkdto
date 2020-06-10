@@ -986,7 +986,7 @@ namespace {
 		} while(true);
 	}
 
-	const wchar_t* sample_data(ImVec2& out) {
+	const wchar_t* sample_data(void) {
 		static const wchar_t	data__[] = 
 		L"linux-hunter 0.0.7              (1001/   0/   0 w/u/s)\n"
 		"SessionId:[Pc8Ec&JMnaQ2] Host:[Emetta]\n"
@@ -1010,23 +1010,61 @@ namespace {
 			t1.detach();
 		}
 
-		const wchar_t	*data = (data_buffer.load()) ? data_buffer.load() : data__,
-				*cur_data = data,
-				*next_line = wcschr(cur_data, L'\n');
-		out.x = 0.0;
-		out.y = 1.0;
-		while(next_line) {
-			const auto sz = (float)(next_line - cur_data);
-			if(sz > out.x) out.x = sz;
-			out.y += 1.0;
-			cur_data = next_line + 1;
-			next_line = wcschr(cur_data, L'\n');
-		}
-		// we need to increase the size
-		out.x *= 8.0;
-		out.y *= 20.0;
+		const wchar_t	*data = (data_buffer.load()) ? data_buffer.load() : data__;
 
 		return data;
+	}
+
+	// returns the max number of chars written
+	// for any row
+	size_t draw_data(const wchar_t* data) {
+		size_t		rv = 0;
+		const wchar_t	*cur_data = data,
+				*next_line = wcschr(cur_data, L'\n');
+
+		auto fn_print_row = [](const wchar_t* b, const wchar_t* e) -> size_t {
+			const static wchar_t	ESC_CHAR = L'#';
+			ssize_t			rv = 0;
+			const wchar_t*		next_esc = wcschr(b, ESC_CHAR);
+
+			while(next_esc && (next_esc < e)) {
+				// print what is between b and next_esc (reset the line)
+				ImGui::Text("%s", to_utf8(b, next_esc).c_str()); ImGui::SameLine(0.0f, 0.0f);
+				rv += next_esc - b;
+				// there should be at least 2 valid wchar_t at
+				// next_esc pointer: itself and the one after
+				// if it's not the case, we have malformed input
+				if(next_esc+2 > e)
+					return rv;
+				// in case is fimply to escape the '#', print it
+				if(next_esc[1] == ESC_CHAR) {
+					ImGui::Text("%s", "#"); ImGui::SameLine(0.0f, 0.0f);
+					++rv;
+				} else {
+					// TODO: we should be processing the format here
+				}
+				// Loop around
+				b = next_esc+2;
+				next_esc = wcschr(b, ESC_CHAR);
+			}
+			if(b > e) {
+				rv += e-b;
+				ImGui::Text("%s", to_utf8(b, e).c_str());
+			}
+			return rv;
+		};
+
+		while(next_line) {
+			const auto	cur_rv = fn_print_row(cur_data, next_line);
+			if(cur_rv > rv) rv = cur_rv;
+			cur_data = next_line+1;
+			next_line = wcschr(cur_data, L'\n');
+		}
+		const auto	sz_left = wcslen(cur_data);
+		const auto	last_rv = fn_print_row(cur_data, cur_data + sz_left);
+		if(last_rv > rv) rv = last_rv;
+
+		return rv;
 	}
 }
 
@@ -1035,24 +1073,15 @@ static void compute_swapchain_display(struct swapchain_data *data)
    struct device_data *device_data = data->device;
    struct instance_data *instance_data = device_data->instance;
 
-   const wchar_t	*cur_data = sample_data(data->window_size);
-
    ImGui::SetCurrentContext(data->imgui_context);
    ImGui::NewFrame();
    position_layer(data);
    ImGui::Begin("vkdto");
 
-   const wchar_t	*next_line = wcschr(cur_data, L'\n');
+   const wchar_t	*cur_data = sample_data();
+   const auto		max_row = draw_data(cur_data);
 
-   while(next_line) {
-	   ImGui::Text("%s", to_utf8(cur_data, next_line).c_str());
-	   cur_data = next_line+1;
-	   next_line = wcschr(cur_data, L'\n');
-   }
-   const auto	sz_left = wcslen(cur_data);
-   ImGui::Text("%s", to_utf8(cur_data, cur_data + sz_left).c_str());
-
-   data->window_size = ImVec2(data->window_size.x, ImGui::GetCursorPosY() + 10.0f);
+   data->window_size = ImVec2(max_row*8.0f, ImGui::GetCursorPosY() + 10.0f);
    ImGui::End();
 
    /*ImGui::Begin("Mesa overlay");

@@ -54,6 +54,8 @@
 #include "vk_enum_to_str.h"
 #include "vk_util.h"
 
+#include "hashtext_fmt.h"
+
 /* Mapped from VkInstace/VkPhysicalDevice */
 struct instance_data {
    struct vk_instance_dispatch_table vtable;
@@ -935,7 +937,7 @@ namespace vkdto {
 		const char	*input_file = 0;
 		size_t		buf_sz = 1024*4;
 		int		ms_update_wait = 250;
-		float		font_size = 15.0;
+		float		font_size = 20.0;
 	}
 
 	void load_opt(void) {
@@ -1030,6 +1032,56 @@ namespace vkdto {
 		return data;
 	}
 
+	// Utility function to process metadata attributes
+	void draw_metadata(const uint32_t md, struct swapchain_data *sc_data) {
+		switch(md) {
+		case ht_fmt::BOLD_ON: {
+			ImGui::PushFont(sc_data->ubuntu_mon_bold);
+		} break;
+		case ht_fmt::BOLD_OFF: {
+			ImGui::PopFont();
+		} break;
+		case ht_fmt::DIM_ON: {
+			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
+		} break;
+		case ht_fmt::DIM_OFF: {
+			ImGui::PopStyleVar();
+		} break;
+		case ht_fmt::BLUE_ON: {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 0.0, 1.0, 1.0));
+		} break;
+		case ht_fmt::BLUE_OFF: {
+			ImGui::PopStyleColor();
+		} break;
+		case ht_fmt::MAGENTA_ON: {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0, 0.0, 1.0, 1.0));
+		} break;
+		case ht_fmt::MAGENTA_OFF: {
+			ImGui::PopStyleColor();
+		} break;
+		case ht_fmt::YELLOW_ON: {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 1.0, 1.0));
+		} break;
+		case ht_fmt::YELLOW_OFF: {
+			ImGui::PopStyleColor();
+		} break;
+		case ht_fmt::GREEN_ON: {
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.0, 1.0));
+		} break;
+		case ht_fmt::GREEN_OFF: {
+			ImGui::PopStyleColor();
+		} break;
+
+		// not directly supported in ImGui
+		// should draw a background rectangle
+		// TODO: implement it :)
+		case ht_fmt::REVERSE_ON:
+		case ht_fmt::REVERSE_OFF:
+		default:
+			break;
+		}
+	}
+
 	// returns the max number of chars written
 	// for any row
 	struct rect2s {
@@ -1037,12 +1089,12 @@ namespace vkdto {
 			y;
 	};
 
-	rect2s draw_data(const wchar_t* data) {
+	rect2s draw_data(const wchar_t* data, struct swapchain_data *sc_data) {
 		rect2s		rv = {0, 1};
 		const wchar_t	*cur_data = data,
 				*next_line = wcschr(cur_data, L'\n');
 
-		auto fn_print_row = [](const wchar_t* b, const wchar_t* e) -> size_t {
+		auto fn_print_row = [&sc_data](const wchar_t* b, const wchar_t* e) -> size_t {
 			const static wchar_t	ESC_CHAR = L'#';
 			ssize_t			rv = 0;
 			const wchar_t*		next_esc = wcschr(b, ESC_CHAR);
@@ -1066,7 +1118,7 @@ namespace vkdto {
 					ImGui::Text("%s", "#"); ImGui::SameLine(0.0f, 0.0f);
 					++rv;
 				} else {
-					// TODO: we should be processing the format here
+					draw_metadata((uint32_t)next_esc[1], sc_data);
 				}
 				// Loop around
 				b = next_esc+2;
@@ -1111,7 +1163,7 @@ static void compute_swapchain_display(struct swapchain_data *data)
 
    vkdto::load_opt();
    const wchar_t	*cur_data = vkdto::sample_data();
-   const auto		rc = vkdto::draw_data(cur_data);
+   const auto		rc = vkdto::draw_data(cur_data, data);
 
    data->window_size = ImVec2(5.3f*vkdto::opt::font_size*0.1f*rc.x, ImGui::GetTextLineHeightWithSpacing()*(rc.y+1));
    ImGui::End();

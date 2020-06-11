@@ -566,7 +566,7 @@ namespace vkdto {
 	}
 
 	// Utility function to process metadata attributes
-	void draw_metadata(const uint32_t md, struct swapchain_data *sc_data) {
+	void draw_metadata(const uint32_t md, struct swapchain_data *sc_data, bool& draw_white_bg) {
 		switch(md) {
 		case ht_fmt::BOLD_ON: {
 			ImGui::PushFont(sc_data->ubuntu_mon_bold);
@@ -604,12 +604,14 @@ namespace vkdto {
 		case ht_fmt::GREEN_OFF: {
 			ImGui::PopStyleColor();
 		} break;
-
-		// not directly supported in ImGui
-		// should draw a background rectangle
-		// TODO: implement it :)
-		case ht_fmt::REVERSE_ON:
-		case ht_fmt::REVERSE_OFF:
+		case ht_fmt::REVERSE_ON: {
+			draw_white_bg = true;
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 0.0, 0.0, 1.0));
+		} break;
+		case ht_fmt::REVERSE_OFF: {
+			ImGui::PopStyleColor();
+			draw_white_bg = false;
+		} break;
 		default:
 			break;
 		}
@@ -626,8 +628,9 @@ namespace vkdto {
 		rect2s		rv = {0, 1};
 		const wchar_t	*cur_data = data,
 				*next_line = wcschr(cur_data, L'\n');
+		bool		draw_white_bg = false;
 
-		auto fn_print_row = [&sc_data](const wchar_t* b, const wchar_t* e) -> size_t {
+		auto fn_print_row = [&sc_data, &draw_white_bg](const wchar_t* b, const wchar_t* e) -> size_t {
 			const static wchar_t	ESC_CHAR = L'#';
 			ssize_t			rv = 0;
 			const wchar_t*		next_esc = wcschr(b, ESC_CHAR);
@@ -637,9 +640,25 @@ namespace vkdto {
 				return 0;
 			}
 
+			auto fn_draw_bg = [&draw_white_bg](const std::string& utf8s) {
+				if(!draw_white_bg)
+					return;
+
+				ImDrawList*		dl = ImGui::GetWindowDrawList();
+				const ImVec2		text_pos = ImGui::GetCursorScreenPos(),
+				      			// TODO: fix this, should not span for the whole
+							// length of the window
+					      		text_size = ImGui::CalcTextSize(&(*utf8s.begin()), &(*utf8s.end()), false, 0.0);
+				const static ImU32	col32 = 0xFFFFFFFF;
+				dl->AddRectFilled(text_pos, ImVec2(text_pos.x + text_size.x, text_pos.y + text_size.y), col32, 0.0f, ImDrawCornerFlags_All);
+			};
+
 			while(next_esc && (next_esc < e)) {
+				// if we have to draw white background
+				const auto	utf8s(to_utf8(b, next_esc));
+				fn_draw_bg(utf8s);
 				// print what is between b and next_esc (reset the line)
-				ImGui::Text("%s", to_utf8(b, next_esc).c_str()); ImGui::SameLine(0.0f, 0.0f);
+				ImGui::Text("%s", utf8s.c_str()); ImGui::SameLine(0.0f, 0.0f);
 				rv += next_esc - b;
 				// there should be at least 2 valid wchar_t at
 				// next_esc pointer: itself and the one after
@@ -648,10 +667,11 @@ namespace vkdto {
 					return rv;
 				// in case is fimply to escape the '#', print it
 				if(next_esc[1] == ESC_CHAR) {
+					fn_draw_bg("#");
 					ImGui::Text("%s", "#"); ImGui::SameLine(0.0f, 0.0f);
 					++rv;
 				} else {
-					draw_metadata((uint32_t)next_esc[1], sc_data);
+					draw_metadata((uint32_t)next_esc[1], sc_data, draw_white_bg);
 				}
 				// Loop around
 				b = next_esc+2;
@@ -659,7 +679,9 @@ namespace vkdto {
 			}
 			if(e > b) {
 				rv += e-b;
-				ImGui::Text("%s", to_utf8(b, e).c_str()); ImGui::SameLine(0.0f, 0.0f);
+				const auto	utf8s(to_utf8(b, e));
+				fn_draw_bg(utf8s);
+				ImGui::Text("%s", utf8s.c_str()); ImGui::SameLine(0.0f, 0.0f);
 			}
 			// no matter what happens, print a newline...
 			ImGui::Text("%s", "");

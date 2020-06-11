@@ -502,12 +502,22 @@ namespace vkdto {
 
 		// I know this may suffer from 'tearing' :)
 		size_t			cur_idx = 0;
+		struct stat		latest_stat = {0}; 
 		do {
+			// sleep for a bit
+			struct timespec	ts = { opt::ms_update_wait/1000, (opt::ms_update_wait%1000)*1000000 };
+			nanosleep(&ts, 0);
 			const size_t	next_idx = (cur_idx+1)%(sizeof(bufs)/sizeof(bufs[0]));
 			std::swprintf(&bufs[next_idx][0], opt::buf_sz,
 					L"Couldn't load contents of '%s'.\nPlease check variable 'VKDTO_FILE' refers to a valid file",
 					(opt::input_file) ? opt::input_file : "");
-			if(opt::input_file) {
+			struct stat	cur_stats;
+			if(opt::input_file && !stat(opt::input_file, &cur_stats)) {
+				if(cur_stats.st_ino == latest_stat.st_ino && cur_stats.st_ctime == latest_stat.st_ctime) {
+					latest_stat = cur_stats;
+					continue;
+				}
+
 				int	fd = open(opt::input_file, O_RDONLY);
 				if(-1 != fd) {
 					// read as much as we can
@@ -523,9 +533,6 @@ namespace vkdto {
 			}
 			data_buffer.store(&bufs[next_idx][0]);
 			cur_idx = next_idx;
-			// sleep for a bit
-			struct timespec	ts = { opt::ms_update_wait/1000, (opt::ms_update_wait%1000)*1000000 };
-			nanosleep(&ts, 0);
 		} while(true);
 	}
 

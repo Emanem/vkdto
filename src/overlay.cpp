@@ -486,10 +486,10 @@ namespace vkdto {
 				*pOut = (char*)&rv[0];
 		size_t		sIn = sizeof(wchar_t)*(end-beg),
 				sOut = bytes_sz;
-		const auto cv = iconv(conv, &pIn, &sIn, &pOut, &sOut);
-		if(cv) return "";
-		else rv.resize(sOut);
+		const int	cv = iconv(conv, &pIn, &sIn, &pOut, &sOut);
 		iconv_close(conv);
+		if(-1 == cv) return "";
+		else rv.resize(bytes_sz - sOut);
 		return rv;
 	}
 
@@ -646,8 +646,6 @@ namespace vkdto {
 
 				ImDrawList*		dl = ImGui::GetWindowDrawList();
 				const ImVec2		text_pos = ImGui::GetCursorScreenPos(),
-				      			// TODO: fix this, should not span for the whole
-							// length of the window
 					      		text_size = ImGui::CalcTextSize(&(*utf8s.begin()), &(*utf8s.end()), false, 0.0);
 				const static ImU32	col32 = 0xFFFFFFFF;
 				dl->AddRectFilled(text_pos, ImVec2(text_pos.x + text_size.x, text_pos.y + text_size.y), col32, 0.0f, ImDrawCornerFlags_All);

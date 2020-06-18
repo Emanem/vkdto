@@ -1410,12 +1410,31 @@ static void setup_swapchain_data_pipeline(struct swapchain_data *data)
    	0x0020, 0xFFFF,
 	0
    };
+   // setup the default font in case ubuntu ones can't be found
+   // nor loaded
+   ImFont* default_font = 0;
+   {
+	ImFontConfig	cfg;
+	cfg.SizePixels = vkdto::opt::font_size;
+	default_font = io.Fonts->AddFontDefault(&cfg);
+	assert(default_font);
+   }
    if(!data->ubuntu_mon_reg) {
-   	data->ubuntu_mon_reg = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf", vkdto::opt::font_size, 0, ALL_RANGES);
+	const static char	font_path[] = "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf";
+	struct stat		s = {0};
+	if(!stat(font_path, &s))
+   		data->ubuntu_mon_reg = io.Fonts->AddFontFromFileTTF(font_path, vkdto::opt::font_size, 0, ALL_RANGES);
+	if(!data->ubuntu_mon_reg)
+		data->ubuntu_mon_reg = default_font;
 	assert(data->ubuntu_mon_reg);
    }
    if(!data->ubuntu_mon_bold) {
-   	data->ubuntu_mon_bold = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/ubuntu/UbuntuMono-B.ttf", vkdto::opt::font_size, 0, ALL_RANGES);
+	const static char	font_path[] = "/usr/share/fonts/truetype/ubuntu/UbuntuMono-B.ttf";
+	struct stat		s = {0};
+	if(!stat(font_path, &s))
+   		data->ubuntu_mon_bold = io.Fonts->AddFontFromFileTTF(font_path, vkdto::opt::font_size, 0, ALL_RANGES);
+	if(!data->ubuntu_mon_bold)
+		data->ubuntu_mon_bold = default_font;
 	assert(data->ubuntu_mon_bold);
    }
    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);

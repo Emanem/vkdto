@@ -464,6 +464,7 @@ namespace vkdto {
 		size_t		buf_sz = 1024*4;
 		int		ms_update_wait = 250;
 		float		font_size = 20.0;
+		float		font_x_size = -1.0;
 	}
 
 	void load_opt(void) {
@@ -473,6 +474,23 @@ namespace vkdto {
 			return;
 
 		opt::input_file = std::getenv("VKDTO_FILE");
+	}
+
+	void set_font_x_size(ImFont* regular, ImFont* bold) {
+		const static char	utf8_latin[] = 
+		"abcdefghijklmnopqrstuvwxyz0123456789"
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZ~`!@#$%^&*()_+-="
+		"[]\\{}|;':\",./<>?";
+		ImGui::PushFont(regular);
+		const auto	sz_reg = ImGui::CalcTextSize(&utf8_latin[0], &utf8_latin[0] + sizeof(utf8_latin)/sizeof(utf8_latin[0]), false, 0.0);
+		ImGui::PopFont();
+		ImGui::PushFont(bold);
+		const auto	sz_bold = ImGui::CalcTextSize(&utf8_latin[0], &utf8_latin[0] + sizeof(utf8_latin)/sizeof(utf8_latin[0]), false, 0.0);
+		ImGui::PopFont();
+		// ensure the fonts have the same dimensions
+		assert((sz_reg.x == sz_bold.x) && (sz_reg.y == sz_bold.y));
+		// take an average for x size
+		opt::font_x_size = sz_reg.x / (sizeof(utf8_latin)/sizeof(utf8_latin[0]));
 	}
 
 	std::string to_utf8(const wchar_t* beg, const wchar_t* end) {
@@ -710,6 +728,8 @@ static void compute_swapchain_display(struct swapchain_data *data)
    ImGui::NewFrame();
    // setup basic font and spacing
    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+   if(vkdto::opt::font_x_size <= 0.0)
+	   vkdto::set_font_x_size(data->ubuntu_mon_reg, data->ubuntu_mon_bold);
    ImGui::PushFont(data->ubuntu_mon_reg);
    position_layer(data);
    ImGui::Begin("vkdto", 0, ImGuiWindowFlags_NoDecoration);
@@ -718,7 +738,7 @@ static void compute_swapchain_display(struct swapchain_data *data)
    const wchar_t	*cur_data = vkdto::sample_data();
    const auto		rc = vkdto::draw_data(cur_data, data);
 
-   data->window_size = ImVec2(5.3f*vkdto::opt::font_size*0.1f*rc.x, ImGui::GetTextLineHeightWithSpacing()*(rc.y+1));
+   data->window_size = ImVec2(vkdto::opt::font_x_size*(1.0+rc.x) + 5.0, ImGui::GetTextLineHeightWithSpacing()*(rc.y+1));
    ImGui::End();
    ImGui::PopFont();
    ImGui::PopStyleVar();

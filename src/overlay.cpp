@@ -464,6 +464,7 @@ namespace vkdto {
 		size_t		buf_sz = 1024*4;
 		int		ms_update_wait = 250;
 		float		font_size = 20.0;
+		float		font_x_size = -1.0;
 	}
 
 	void load_opt(void) {
@@ -473,6 +474,23 @@ namespace vkdto {
 			return;
 
 		opt::input_file = std::getenv("VKDTO_FILE");
+	}
+
+	void set_font_x_size(ImFont* regular, ImFont* bold) {
+		const static char	utf8_latin[] = 
+		"abcdefghijklmnopqrstuvwxyz0123456789"
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZ~`!@#$%^&*()_+-="
+		"[]\\{}|;':\",./<>?";
+		ImGui::PushFont(regular);
+		const auto	sz_reg = ImGui::CalcTextSize(&utf8_latin[0], &utf8_latin[0] + sizeof(utf8_latin)/sizeof(utf8_latin[0]), false, 0.0);
+		ImGui::PopFont();
+		ImGui::PushFont(bold);
+		const auto	sz_bold = ImGui::CalcTextSize(&utf8_latin[0], &utf8_latin[0] + sizeof(utf8_latin)/sizeof(utf8_latin[0]), false, 0.0);
+		ImGui::PopFont();
+		// ensure the fonts have the same dimensions
+		assert((sz_reg.x == sz_bold.x) && (sz_reg.y == sz_bold.y));
+		// take an average for x size
+		opt::font_x_size = sz_reg.x / (sizeof(utf8_latin)/sizeof(utf8_latin[0]));
 	}
 
 	std::string to_utf8(const wchar_t* beg, const wchar_t* end) {
@@ -486,10 +504,10 @@ namespace vkdto {
 				*pOut = (char*)&rv[0];
 		size_t		sIn = sizeof(wchar_t)*(end-beg),
 				sOut = bytes_sz;
-		const auto cv = iconv(conv, &pIn, &sIn, &pOut, &sOut);
-		if(cv) return "";
-		else rv.resize(sOut);
+		const int	cv = iconv(conv, &pIn, &sIn, &pOut, &sOut);
 		iconv_close(conv);
+		if(-1 == cv) return "";
+		else rv.resize(bytes_sz - sOut);
 		return rv;
 	}
 
@@ -502,12 +520,22 @@ namespace vkdto {
 
 		// I know this may suffer from 'tearing' :)
 		size_t			cur_idx = 0;
+		struct stat		latest_stat = {0}; 
 		do {
+			// sleep for a bit
+			struct timespec	ts = { opt::ms_update_wait/1000, (opt::ms_update_wait%1000)*1000000 };
+			nanosleep(&ts, 0);
 			const size_t	next_idx = (cur_idx+1)%(sizeof(bufs)/sizeof(bufs[0]));
 			std::swprintf(&bufs[next_idx][0], opt::buf_sz,
 					L"Couldn't load contents of '%s'.\nPlease check variable 'VKDTO_FILE' refers to a valid file",
 					(opt::input_file) ? opt::input_file : "");
-			if(opt::input_file) {
+			struct stat	cur_stats;
+			if(opt::input_file && !stat(opt::input_file, &cur_stats)) {
+				if(cur_stats.st_ino == latest_stat.st_ino && cur_stats.st_ctime == latest_stat.st_ctime) {
+					latest_stat = cur_stats;
+					continue;
+				}
+
 				int	fd = open(opt::input_file, O_RDONLY);
 				if(-1 != fd) {
 					// read as much as we can
@@ -523,9 +551,6 @@ namespace vkdto {
 			}
 			data_buffer.store(&bufs[next_idx][0]);
 			cur_idx = next_idx;
-			// sleep for a bit
-			struct timespec	ts = { opt::ms_update_wait/1000, (opt::ms_update_wait%1000)*1000000 };
-			nanosleep(&ts, 0);
 		} while(true);
 	}
 
@@ -559,7 +584,7 @@ namespace vkdto {
 	}
 
 	// Utility function to process metadata attributes
-	void draw_metadata(const uint32_t md, struct swapchain_data *sc_data) {
+	void draw_metadata(const uint32_t md, struct swapchain_data *sc_data, bool& draw_white_bg) {
 		switch(md) {
 		case ht_fmt::BOLD_ON: {
 			ImGui::PushFont(sc_data->ubuntu_mon_bold);
@@ -597,12 +622,14 @@ namespace vkdto {
 		case ht_fmt::GREEN_OFF: {
 			ImGui::PopStyleColor();
 		} break;
-
-		// not directly supported in ImGui
-		// should draw a background rectangle
-		// TODO: implement it :)
-		case ht_fmt::REVERSE_ON:
-		case ht_fmt::REVERSE_OFF:
+		case ht_fmt::REVERSE_ON: {
+			draw_white_bg = true;
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 0.0, 0.0, 1.0));
+		} break;
+		case ht_fmt::REVERSE_OFF: {
+			ImGui::PopStyleColor();
+			draw_white_bg = false;
+		} break;
 		default:
 			break;
 		}
@@ -619,8 +646,9 @@ namespace vkdto {
 		rect2s		rv = {0, 1};
 		const wchar_t	*cur_data = data,
 				*next_line = wcschr(cur_data, L'\n');
+		bool		draw_white_bg = false;
 
-		auto fn_print_row = [&sc_data](const wchar_t* b, const wchar_t* e) -> size_t {
+		auto fn_print_row = [&sc_data, &draw_white_bg](const wchar_t* b, const wchar_t* e) -> size_t {
 			const static wchar_t	ESC_CHAR = L'#';
 			ssize_t			rv = 0;
 			const wchar_t*		next_esc = wcschr(b, ESC_CHAR);
@@ -630,9 +658,23 @@ namespace vkdto {
 				return 0;
 			}
 
+			auto fn_draw_bg = [&draw_white_bg](const std::string& utf8s) {
+				if(!draw_white_bg)
+					return;
+
+				ImDrawList*		dl = ImGui::GetWindowDrawList();
+				const ImVec2		text_pos = ImGui::GetCursorScreenPos(),
+					      		text_size = ImGui::CalcTextSize(&(*utf8s.begin()), &(*utf8s.end()), false, 0.0);
+				const static ImU32	col32 = 0xFFFFFFFF;
+				dl->AddRectFilled(text_pos, ImVec2(text_pos.x + text_size.x, text_pos.y + text_size.y), col32, 0.0f, ImDrawCornerFlags_All);
+			};
+
 			while(next_esc && (next_esc < e)) {
+				// if we have to draw white background
+				const auto	utf8s(to_utf8(b, next_esc));
+				fn_draw_bg(utf8s);
 				// print what is between b and next_esc (reset the line)
-				ImGui::Text("%s", to_utf8(b, next_esc).c_str()); ImGui::SameLine(0.0f, 0.0f);
+				ImGui::Text("%s", utf8s.c_str()); ImGui::SameLine(0.0f, 0.0f);
 				rv += next_esc - b;
 				// there should be at least 2 valid wchar_t at
 				// next_esc pointer: itself and the one after
@@ -641,10 +683,11 @@ namespace vkdto {
 					return rv;
 				// in case is fimply to escape the '#', print it
 				if(next_esc[1] == ESC_CHAR) {
+					fn_draw_bg("#");
 					ImGui::Text("%s", "#"); ImGui::SameLine(0.0f, 0.0f);
 					++rv;
 				} else {
-					draw_metadata((uint32_t)next_esc[1], sc_data);
+					draw_metadata((uint32_t)next_esc[1], sc_data, draw_white_bg);
 				}
 				// Loop around
 				b = next_esc+2;
@@ -652,7 +695,9 @@ namespace vkdto {
 			}
 			if(e > b) {
 				rv += e-b;
-				ImGui::Text("%s", to_utf8(b, e).c_str()); ImGui::SameLine(0.0f, 0.0f);
+				const auto	utf8s(to_utf8(b, e));
+				fn_draw_bg(utf8s);
+				ImGui::Text("%s", utf8s.c_str()); ImGui::SameLine(0.0f, 0.0f);
 			}
 			// no matter what happens, print a newline...
 			ImGui::Text("%s", "");
@@ -683,6 +728,8 @@ static void compute_swapchain_display(struct swapchain_data *data)
    ImGui::NewFrame();
    // setup basic font and spacing
    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+   if(vkdto::opt::font_x_size <= 0.0)
+	   vkdto::set_font_x_size(data->ubuntu_mon_reg, data->ubuntu_mon_bold);
    ImGui::PushFont(data->ubuntu_mon_reg);
    position_layer(data);
    ImGui::Begin("vkdto", 0, ImGuiWindowFlags_NoDecoration);
@@ -691,7 +738,7 @@ static void compute_swapchain_display(struct swapchain_data *data)
    const wchar_t	*cur_data = vkdto::sample_data();
    const auto		rc = vkdto::draw_data(cur_data, data);
 
-   data->window_size = ImVec2(5.3f*vkdto::opt::font_size*0.1f*rc.x, ImGui::GetTextLineHeightWithSpacing()*(rc.y+1));
+   data->window_size = ImVec2(vkdto::opt::font_x_size*(1.0+rc.x) + 5.0, ImGui::GetTextLineHeightWithSpacing()*(rc.y+1));
    ImGui::End();
    ImGui::PopFont();
    ImGui::PopStyleVar();
@@ -1383,12 +1430,31 @@ static void setup_swapchain_data_pipeline(struct swapchain_data *data)
    	0x0020, 0xFFFF,
 	0
    };
+   // setup the default font in case ubuntu ones can't be found
+   // nor loaded
+   ImFont* default_font = 0;
+   {
+	ImFontConfig	cfg;
+	cfg.SizePixels = vkdto::opt::font_size;
+	default_font = io.Fonts->AddFontDefault(&cfg);
+	assert(default_font);
+   }
    if(!data->ubuntu_mon_reg) {
-   	data->ubuntu_mon_reg = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf", vkdto::opt::font_size, 0, ALL_RANGES);
+	const static char	font_path[] = "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf";
+	struct stat		s = {0};
+	if(!stat(font_path, &s))
+   		data->ubuntu_mon_reg = io.Fonts->AddFontFromFileTTF(font_path, vkdto::opt::font_size, 0, ALL_RANGES);
+	if(!data->ubuntu_mon_reg)
+		data->ubuntu_mon_reg = default_font;
 	assert(data->ubuntu_mon_reg);
    }
    if(!data->ubuntu_mon_bold) {
-   	data->ubuntu_mon_bold = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/ubuntu/UbuntuMono-B.ttf", vkdto::opt::font_size, 0, ALL_RANGES);
+	const static char	font_path[] = "/usr/share/fonts/truetype/ubuntu/UbuntuMono-B.ttf";
+	struct stat		s = {0};
+	if(!stat(font_path, &s))
+   		data->ubuntu_mon_bold = io.Fonts->AddFontFromFileTTF(font_path, vkdto::opt::font_size, 0, ALL_RANGES);
+	if(!data->ubuntu_mon_bold)
+		data->ubuntu_mon_bold = default_font;
 	assert(data->ubuntu_mon_bold);
    }
    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);

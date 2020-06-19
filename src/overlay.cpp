@@ -643,12 +643,12 @@ namespace vkdto {
 	};
 
 	rect2s draw_data(const wchar_t* data, struct swapchain_data *sc_data) {
-		rect2s		rv = {0, 1};
+		rect2s		rv = {0, 0};
 		const wchar_t	*cur_data = data,
 				*next_line = wcschr(cur_data, L'\n');
 		bool		draw_white_bg = false;
 
-		auto fn_print_row = [&sc_data, &draw_white_bg](const wchar_t* b, const wchar_t* e) -> float {
+		auto fn_print_row = [&sc_data, &draw_white_bg](const wchar_t* b, const wchar_t* e) -> size_t {
 			const static wchar_t	ESC_CHAR = L'#';
 			const wchar_t*		next_esc = wcschr(b, ESC_CHAR);
 			float			cur_pos = -1.0;
@@ -685,7 +685,7 @@ namespace vkdto {
 				// next_esc pointer: itself and the one after
 				// if it's not the case, we have malformed input
 				if(next_esc+2 > e)
-					return cur_pos;
+					return (size_t)cur_pos;
 				// in case is fimply to escape the '#', print it
 				if(next_esc[1] == ESC_CHAR) {
 					fn_draw_bg("#");
@@ -704,7 +704,7 @@ namespace vkdto {
 			}
 			// no matter what happens, print a newline...
 			ImGui::Text("%s", "");
-			return cur_pos;
+			return (size_t)cur_pos;
 		};
 
 		while(next_line) {
@@ -712,11 +712,11 @@ namespace vkdto {
 			if(cur_rv > rv.x) rv.x = cur_rv;
 			cur_data = next_line+1;
 			next_line = wcschr(cur_data, L'\n');
-			rv.y += 1;
 		}
 		const auto	sz_left = wcslen(cur_data);
 		const auto	last_rv = fn_print_row(cur_data, cur_data + sz_left);
 		if(last_rv > rv.x) rv.x = last_rv;
+		rv.y = (size_t)ImGui::GetCursorPosY();
 
 		return rv;
 	}
@@ -741,7 +741,7 @@ static void compute_swapchain_display(struct swapchain_data *data)
    const wchar_t	*cur_data = vkdto::sample_data();
    const auto		rc = vkdto::draw_data(cur_data, data);
 
-   data->window_size = ImVec2(rc.x + 8.0, ImGui::GetTextLineHeightWithSpacing()*(rc.y+1));
+   data->window_size = ImVec2(rc.x + 8.0, rc.y + 8.0);
    ImGui::End();
    ImGui::PopFont();
    ImGui::PopStyleVar();

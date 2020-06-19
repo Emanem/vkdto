@@ -648,10 +648,16 @@ namespace vkdto {
 				*next_line = wcschr(cur_data, L'\n');
 		bool		draw_white_bg = false;
 
-		auto fn_print_row = [&sc_data, &draw_white_bg](const wchar_t* b, const wchar_t* e) -> size_t {
+		auto fn_print_row = [&sc_data, &draw_white_bg](const wchar_t* b, const wchar_t* e) -> float {
 			const static wchar_t	ESC_CHAR = L'#';
-			ssize_t			rv = 0;
 			const wchar_t*		next_esc = wcschr(b, ESC_CHAR);
+			float			cur_pos = -1.0;
+
+			auto fn_set_cur_pos = [&cur_pos](void) -> void {
+				const auto	c_cur_pos = ImGui::GetCursorPosX();
+				if(c_cur_pos > cur_pos)
+					cur_pos = c_cur_pos;
+			};
 
 			if(e == b) {
 				ImGui::Text("%s", "");
@@ -674,18 +680,16 @@ namespace vkdto {
 				const auto	utf8s(to_utf8(b, next_esc));
 				fn_draw_bg(utf8s);
 				// print what is between b and next_esc (reset the line)
-				ImGui::Text("%s", utf8s.c_str()); ImGui::SameLine(0.0f, 0.0f);
-				rv += next_esc - b;
+				ImGui::Text("%s", utf8s.c_str()); ImGui::SameLine(0.0f, 0.0f); fn_set_cur_pos();
 				// there should be at least 2 valid wchar_t at
 				// next_esc pointer: itself and the one after
 				// if it's not the case, we have malformed input
 				if(next_esc+2 > e)
-					return rv;
+					return cur_pos;
 				// in case is fimply to escape the '#', print it
 				if(next_esc[1] == ESC_CHAR) {
 					fn_draw_bg("#");
-					ImGui::Text("%s", "#"); ImGui::SameLine(0.0f, 0.0f);
-					++rv;
+					ImGui::Text("%s", "#"); ImGui::SameLine(0.0f, 0.0f); fn_set_cur_pos();
 				} else {
 					draw_metadata((uint32_t)next_esc[1], sc_data, draw_white_bg);
 				}
@@ -694,14 +698,13 @@ namespace vkdto {
 				next_esc = wcschr(b, ESC_CHAR);
 			}
 			if(e > b) {
-				rv += e-b;
 				const auto	utf8s(to_utf8(b, e));
 				fn_draw_bg(utf8s);
-				ImGui::Text("%s", utf8s.c_str()); ImGui::SameLine(0.0f, 0.0f);
+				ImGui::Text("%s", utf8s.c_str()); ImGui::SameLine(0.0f, 0.0f); fn_set_cur_pos();
 			}
 			// no matter what happens, print a newline...
 			ImGui::Text("%s", "");
-			return rv;
+			return cur_pos;
 		};
 
 		while(next_line) {
@@ -738,7 +741,7 @@ static void compute_swapchain_display(struct swapchain_data *data)
    const wchar_t	*cur_data = vkdto::sample_data();
    const auto		rc = vkdto::draw_data(cur_data, data);
 
-   data->window_size = ImVec2(vkdto::opt::font_x_size*(1.0+rc.x) + 5.0, ImGui::GetTextLineHeightWithSpacing()*(rc.y+1));
+   data->window_size = ImVec2(rc.x + 8.0, ImGui::GetTextLineHeightWithSpacing()*(rc.y+1));
    ImGui::End();
    ImGui::PopFont();
    ImGui::PopStyleVar();

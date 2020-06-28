@@ -8,18 +8,15 @@ SRCDIR=src
 OBJDIR=obj
 FLAGS=-g -Wall -std=c++11 -pthread -fPIC -shared 
 LIBS=
-OBJS=$(OBJDIR)/overlay_params.o $(OBJDIR)/overlay.o $(OBJDIR)/hash_table.o $(OBJDIR)/u_math.o $(OBJDIR)/ralloc.o $(OBJDIR)/u_debug.o $(OBJDIR)/vk_enum_to_str.o $(OBJDIR)/imgui_draw.o $(OBJDIR)/os_misc.o $(OBJDIR)/imgui.o $(OBJDIR)/bitscan.o $(OBJDIR)/u_cpu_detect.o $(OBJDIR)/vk_util.o $(OBJDIR)/imgui_widgets.o 
+OBJS=$(OBJDIR)/overlay.o $(OBJDIR)/hash_table.o $(OBJDIR)/u_math.o $(OBJDIR)/ralloc.o $(OBJDIR)/u_debug.o $(OBJDIR)/vk_enum_to_str.o $(OBJDIR)/imgui_draw.o $(OBJDIR)/os_misc.o $(OBJDIR)/imgui.o $(OBJDIR)/bitscan.o $(OBJDIR)/u_cpu_detect.o $(OBJDIR)/vk_util.o $(OBJDIR)/imgui_widgets.o 
 EXEC=vkdto.so
 DATE=$(shell date +"%Y-%m-%d")
 
 $(EXEC) : $(OBJS)
 	$(LINK) $(OBJS) -o $(EXEC) $(FLAGS) $(LIBS)
 
-$(OBJDIR)/overlay_params.o: src/overlay_params.c src/overlay_params.h $(OBJDIR)/__setup_obj_dir
-	$(CC) $(FLAGS) src/overlay_params.c -c -o $@
-
 $(OBJDIR)/overlay.o: src/overlay.cpp src/imgui.h src/imconfig.h \
- src/overlay_params.h src/hash_table.h src/c99_compat.h src/no_extern_c.h \
+ src/hash_table.h src/c99_compat.h src/no_extern_c.h \
  src/macros.h src/c11_compat.h src/list.h src/ralloc.h src/simple_mtx.h \
  src/futex.h src/threads.h src/threads_posix.h src/vk_enum_to_str.h \
  src/vk_util.h src/hashtext_fmt.h src/overlay.vert.spv.h \

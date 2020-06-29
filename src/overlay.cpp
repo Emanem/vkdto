@@ -597,7 +597,7 @@ namespace vkdto {
 			ImGui::SetNextWindowPos(ImVec2(margin, margin), ImGuiCond_Always);
 			break;
 		case pos::TC:
-			ImGui::SetNextWindowPos(ImVec2(0.5*(data->width - data->window_size.x - margin), margin),
+			ImGui::SetNextWindowPos(ImVec2(0.5*(data->width - data->window_size.x), margin),
 					      ImGuiCond_Always);
 			break;
 		case pos::TR:
@@ -609,7 +609,7 @@ namespace vkdto {
 					      ImGuiCond_Always);
 			break;
 		case pos::BC:
-			ImGui::SetNextWindowPos(ImVec2(0.5*(data->width - data->window_size.x - margin),
+			ImGui::SetNextWindowPos(ImVec2(0.5*(data->width - data->window_size.x),
 						data->height - data->window_size.y - margin),
 					      ImGuiCond_Always);
 			break;

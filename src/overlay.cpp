@@ -423,7 +423,8 @@ namespace vkdto {
 	};
 
 	namespace opt {
-		const char	*PARAM_POS = "pos";
+		const char	*PARAM_POS = "pos",
+				*PARAM_FONT_SIZE = "font_size";
 
 		const char	*input_file = 0;
 		size_t		buf_sz = 1024*4;
@@ -471,6 +472,10 @@ namespace vkdto {
 							cur_v(next_p ? std::string(cur_sep+1, next_p) : std::string(cur_sep+1));
 				// decide which parameter to fill
 				if(cur_p == opt::PARAM_POS) set_ol_pos(cur_v);
+				else if(cur_p == opt::PARAM_FONT_SIZE) {
+					const double	val = std::atof(cur_v.c_str());
+					if(val > 0.0) opt::font_size = val;
+				}
 
 				// set the next opt_str
 				// and carry on
@@ -776,7 +781,6 @@ static void compute_swapchain_display(struct swapchain_data *data)
    vkdto::position_layer(data);
    ImGui::Begin("vkdto", 0, ImGuiWindowFlags_NoDecoration);
 
-   vkdto::load_opt();
    const wchar_t	*cur_data = vkdto::sample_data();
    const auto		rc = vkdto::draw_data(cur_data, data);
 
@@ -1565,6 +1569,10 @@ static void setup_swapchain_data(struct swapchain_data *data,
    data->width = pCreateInfo->imageExtent.width;
    data->height = pCreateInfo->imageExtent.height;
    data->format = pCreateInfo->imageFormat;
+
+   // load options here, before we instantiate
+   // ImGui objects and whatnot
+   vkdto::load_opt();
 
    data->imgui_context = ImGui::CreateContext();
    ImGui::SetCurrentContext(data->imgui_context);

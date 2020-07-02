@@ -32,7 +32,7 @@ It is possible to specify further options (such as overlay position, font size, 
 ```
 <param>=<value>:<param>=<value>:...
 ```
-An example could be `VKDTO_OPT="pos=tc:font_size=15.6". Paramaters/values can be as follows:
+An example could be `VKDTO_OPT="pos=tc:font_size=15.6"`. Paramaters/values can be as follows:
 
 * *pos* - overlay position</br>Can have following values _tl_, _tc_, _tr_ for top-left, top-center and top-right and also _bl_, _bc_, _br_ for the same but bottom
 * *font_size* - font size</br>A floating point value can be specified for the font size in pixels

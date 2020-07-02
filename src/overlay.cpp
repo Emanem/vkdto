@@ -422,6 +422,25 @@ namespace vkdto {
 		BR
 	};
 
+	namespace debug {
+		FILE	*log = 0;
+
+		std::string get_ts(void) {
+			using namespace std::chrono;
+			const auto	tp = high_resolution_clock::now();
+			const auto	tp_tm = time_point_cast<system_clock::duration>(tp);
+			const auto	tm_t = system_clock::to_time_t(tp_tm);
+			struct tm	res = {0};
+			localtime_r(&tm_t, &res);
+			char		tm_fmt[32],
+					tm_buf[32];
+			std::sprintf(tm_fmt, "%%Y-%%m-%%dT%%H:%%M:%%S.%03i", static_cast<int>(duration_cast<milliseconds>(tp.time_since_epoch()).count()%1000));
+			std::strftime(tm_buf, sizeof(tm_buf), tm_fmt, &res);
+
+			return std::string(tm_buf);
+		}
+	}
+
 	namespace opt {
 		const char	*PARAM_POS = "pos",
 				*PARAM_FONT_SIZE = "font_size";
@@ -448,6 +467,15 @@ namespace vkdto {
 		bool				exp_val = true;
 		if(!first_run || !first_run.compare_exchange_strong(exp_val, false))
 			return;
+
+		// debug file
+		const char* dbg_file = std::getenv("VKDTO_DEBUG_LOG");
+		if(dbg_file) {
+			debug::log = std::fopen(dbg_file, "a");
+			if(debug::log) {
+				std::fprintf(debug::log, "%s VKDTO_DEBUG_LOG started\n", debug::get_ts().c_str());
+			}
+		}
 
 		// file to be loaded
 		opt::input_file = std::getenv("VKDTO_FILE");
@@ -592,6 +620,18 @@ namespace vkdto {
 	}
 
 	void position_layer(struct swapchain_data *data) {
+		if(debug::log) {
+			std::fprintf(debug::log,
+					"%s %s swapchain_data %p data->width %d data->height %d\n",
+					debug::get_ts().c_str(),
+					__FUNCTION__,
+					data,
+					data->width,
+					data->height);
+			std::fflush(debug::log);
+		}
+
+
 		const float margin = 10.0f;
 
 		ImGui::SetNextWindowBgAlpha(0.5);
@@ -768,9 +808,6 @@ namespace vkdto {
 
 static void compute_swapchain_display(struct swapchain_data *data)
 {
-   //struct device_data *device_data = data->device;
-   //struct instance_data *instance_data = device_data->instance;
-
    ImGui::SetCurrentContext(data->imgui_context);
    ImGui::NewFrame();
    // setup basic font and spacing
@@ -790,75 +827,6 @@ static void compute_swapchain_display(struct swapchain_data *data)
    ImGui::PopStyleVar();
    ImGui::EndFrame();
    ImGui::Render();
-
-   /*ImGui::Begin("Mesa overlay");
-   ImGui::Text("Device: %s", device_data->properties.deviceName);
-   //ImGui::Text("Kanjis: \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e (nihongo)");
-
-   const char *format_name = vk_Format_to_str(data->format);
-   format_name = format_name ? (format_name + strlen("VK_FORMAT_")) : "unknown";
-   ImGui::Text("Swapchain format: %s", format_name);
-   ImGui::Text("Frames: %" PRIu64, data->n_frames);
-   if (instance_data->params.enabled[OVERLAY_PARAM_ENABLED_fps])
-      ImGui::Text("FPS: %.2f" , data->fps);
-
-   // Recompute min/max 
-   for (uint32_t s = 0; s < OVERLAY_PARAM_ENABLED_MAX; s++) {
-      data->stats_min.stats[s] = UINT64_MAX;
-      data->stats_max.stats[s] = 0;
-   }
-   for (uint32_t f = 0; f < MIN2(data->n_frames, ARRAY_SIZE(data->frames_stats)); f++) {
-      for (uint32_t s = 0; s < OVERLAY_PARAM_ENABLED_MAX; s++) {
-         data->stats_min.stats[s] = MIN2(data->frames_stats[f].stats[s],
-                                         data->stats_min.stats[s]);
-         data->stats_max.stats[s] = MAX2(data->frames_stats[f].stats[s],
-                                         data->stats_max.stats[s]);
-      }
-   }
-   for (uint32_t s = 0; s < OVERLAY_PARAM_ENABLED_MAX; s++) {
-      assert(data->stats_min.stats[s] != UINT64_MAX);
-   }
-
-   for (uint32_t s = 0; s < OVERLAY_PARAM_ENABLED_MAX; s++) {
-      if (!instance_data->params.enabled[s] ||
-          s == OVERLAY_PARAM_ENABLED_fps ||
-          s == OVERLAY_PARAM_ENABLED_frame)
-         continue;
-
-      char hash[40];
-      snprintf(hash, sizeof(hash), "##%s", overlay_param_names[s]);
-      data->stat_selector = (enum overlay_param_enabled) s;
-      data->time_dividor = 1000.0f;
-      if (s == OVERLAY_PARAM_ENABLED_gpu_timing)
-         data->time_dividor = 1000000.0f;
-
-      if (s == OVERLAY_PARAM_ENABLED_frame_timing ||
-          s == OVERLAY_PARAM_ENABLED_acquire_timing ||
-          s == OVERLAY_PARAM_ENABLED_present_timing ||
-          s == OVERLAY_PARAM_ENABLED_gpu_timing) {
-         double min_time = data->stats_min.stats[s] / data->time_dividor;
-         double max_time = data->stats_max.stats[s] / data->time_dividor;
-         ImGui::PlotHistogram(hash, get_time_stat, data,
-                              ARRAY_SIZE(data->frames_stats), 0,
-                              NULL, min_time, max_time,
-                              ImVec2(ImGui::GetContentRegionAvailWidth(), 30));
-         ImGui::Text("%s: %.3fms [%.3f, %.3f]", overlay_param_names[s],
-                     get_time_stat(data, ARRAY_SIZE(data->frames_stats) - 1),
-                     min_time, max_time);
-      } else {
-         ImGui::PlotHistogram(hash, get_stat, data,
-                              ARRAY_SIZE(data->frames_stats), 0,
-                              NULL,
-                              data->stats_min.stats[s],
-                              data->stats_max.stats[s],
-                              ImVec2(ImGui::GetContentRegionAvailWidth(), 30));
-         ImGui::Text("%s: %.0f [%" PRIu64 ", %" PRIu64 "]", overlay_param_names[s],
-                     get_stat(data, ARRAY_SIZE(data->frames_stats) - 1),
-                     data->stats_min.stats[s], data->stats_max.stats[s]);
-      }
-   }
-   data->window_size = ImVec2(data->window_size.x, ImGui::GetCursorPosY() + 10.0f);
-   ImGui::End();*/
 }
 
 static uint32_t vk_memory_type(struct device_data *data,
@@ -1566,13 +1534,24 @@ static void setup_swapchain_data_pipeline(struct swapchain_data *data)
 static void setup_swapchain_data(struct swapchain_data *data,
                                  const VkSwapchainCreateInfoKHR *pCreateInfo)
 {
-   data->width = pCreateInfo->imageExtent.width;
-   data->height = pCreateInfo->imageExtent.height;
-   data->format = pCreateInfo->imageFormat;
-
    // load options here, before we instantiate
    // ImGui objects and whatnot
    vkdto::load_opt();
+
+   if(vkdto::debug::log) {
+	   std::fprintf(vkdto::debug::log,
+			   "%s %s swapchain_data %p pCreateInfo->imageExtent.width %d, pCreateInfo->imageExtent.height %d\n",
+			   vkdto::debug::get_ts().c_str(),
+			   __FUNCTION__,
+			   data,
+			   pCreateInfo->imageExtent.width,
+			   pCreateInfo->imageExtent.height);
+	   std::fflush(vkdto::debug::log);
+   }
+
+   data->width = pCreateInfo->imageExtent.width;
+   data->height = pCreateInfo->imageExtent.height;
+   data->format = pCreateInfo->imageFormat;
 
    data->imgui_context = ImGui::CreateContext();
    ImGui::SetCurrentContext(data->imgui_context);
@@ -1679,6 +1658,15 @@ static void setup_swapchain_data(struct swapchain_data *data,
 
 static void shutdown_swapchain_data(struct swapchain_data *data)
 {
+   if(vkdto::debug::log) {
+	   std::fprintf(vkdto::debug::log,
+			   "%s %s swapchain_data %p\n",
+			   vkdto::debug::get_ts().c_str(),
+			   __FUNCTION__,
+			   data);
+	   std::fflush(vkdto::debug::log);
+   }
+
    struct device_data *device_data = data->device;
 
    list_for_each_entry_safe(struct overlay_draw, draw, &data->draws, link) {
@@ -1731,6 +1719,18 @@ static struct overlay_draw *before_present(struct swapchain_data *swapchain_data
    draw = render_swapchain_display(swapchain_data, present_queue,
                                    wait_semaphores, n_wait_semaphores,
                                    imageIndex);
+
+   if(vkdto::debug::log) {
+      std::fprintf(vkdto::debug::log,
+		      "%s %s swapchain_data %p present_queue %p overlay_draw %p\n",
+		      vkdto::debug::get_ts().c_str(),
+		      __FUNCTION__,
+		      swapchain_data,
+		      present_queue,
+		      draw);
+      std::fflush(vkdto::debug::log);
+   }
+
    return draw;
 }
 

@@ -443,13 +443,15 @@ namespace vkdto {
 
 	namespace opt {
 		const char	*PARAM_POS = "pos",
-				*PARAM_FONT_SIZE = "font_size";
+				*PARAM_FONT_SIZE = "font_size",
+				*PARAM_MARGIN = "margin";
 
 		const char	*input_file = 0;
 		size_t		buf_sz = 1024*4;
 		int		ms_update_wait = 250;
 		float		font_size = 20.0;
 		float		font_x_size = -1.0;
+		float		margin = 10.0f;
 		pos		ol_pos = TL;
 	}
 
@@ -503,6 +505,9 @@ namespace vkdto {
 				else if(cur_p == opt::PARAM_FONT_SIZE) {
 					const double	val = std::atof(cur_v.c_str());
 					if(val > 0.0) opt::font_size = val;
+				} else if(cur_p == opt::PARAM_MARGIN) {
+					const double	val = std::atof(cur_v.c_str());
+					if(val >= 0.0) opt::margin = val;
 				}
 
 				// set the next opt_str
@@ -632,35 +637,33 @@ namespace vkdto {
 		}
 
 
-		const float margin = 10.0f;
-
 		ImGui::SetNextWindowBgAlpha(0.5);
 		ImGui::SetNextWindowSize(data->window_size, ImGuiCond_Always);
 		switch (opt::ol_pos) {
 		default:
 		case pos::TL:
-			ImGui::SetNextWindowPos(ImVec2(margin, margin), ImGuiCond_Always);
+			ImGui::SetNextWindowPos(ImVec2(opt::margin, opt::margin), ImGuiCond_Always);
 			break;
 		case pos::TC:
-			ImGui::SetNextWindowPos(ImVec2(0.5*(data->width - data->window_size.x), margin),
+			ImGui::SetNextWindowPos(ImVec2(0.5*(data->width - data->window_size.x), opt::margin),
 					      ImGuiCond_Always);
 			break;
 		case pos::TR:
-			ImGui::SetNextWindowPos(ImVec2(data->width - data->window_size.x - margin, margin),
+			ImGui::SetNextWindowPos(ImVec2(data->width - data->window_size.x - opt::margin, opt::margin),
 					      ImGuiCond_Always);
 			break;
 		case pos::BL:
-			ImGui::SetNextWindowPos(ImVec2(margin, data->height - data->window_size.y - margin),
+			ImGui::SetNextWindowPos(ImVec2(opt::margin, data->height - data->window_size.y - opt::margin),
 					      ImGuiCond_Always);
 			break;
 		case pos::BC:
 			ImGui::SetNextWindowPos(ImVec2(0.5*(data->width - data->window_size.x),
-						data->height - data->window_size.y - margin),
+						data->height - data->window_size.y - opt::margin),
 					      ImGuiCond_Always);
 			break;
 		case pos::BR:
-			ImGui::SetNextWindowPos(ImVec2(data->width - data->window_size.x - margin,
-						     data->height - data->window_size.y - margin),
+			ImGui::SetNextWindowPos(ImVec2(data->width - data->window_size.x - opt::margin,
+						     data->height - data->window_size.y - opt::margin),
 					      ImGuiCond_Always);
 			break;
 		}

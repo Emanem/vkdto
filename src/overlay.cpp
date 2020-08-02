@@ -29,6 +29,7 @@
 #include <atomic>
 #include <thread>
 #include <vector>
+#include <cstring>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -38,7 +39,6 @@
 #include <vulkan/vk_layer.h>
 
 #include "imgui.h"
-#include "overlay_params.h"
 #include "hash_table.h"
 #include "list.h"
 #include "ralloc.h"
@@ -53,8 +53,6 @@
 struct instance_data {
    struct vk_instance_dispatch_table vtable;
    VkInstance instance;
-
-   struct overlay_params params;
 
    bool first_line_printed;
 };
@@ -148,20 +146,6 @@ struct swapchain_data {
    ImVec2 window_size;
 };
 
-static const VkQueryPipelineStatisticFlags overlay_query_flags =
-   VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT |
-   VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT |
-   VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT |
-   VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_INVOCATIONS_BIT |
-   VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT |
-   VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
-   VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
-   VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT |
-   VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_CONTROL_SHADER_PATCHES_BIT |
-   VK_QUERY_PIPELINE_STATISTIC_TESSELLATION_EVALUATION_SHADER_INVOCATIONS_BIT |
-   VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT;
-#define OVERLAY_QUERY_COUNT (11)
-
 static struct hash_table_u64 *vk_object_to_data = NULL;
 static simple_mtx_t vk_object_to_data_mutex = _SIMPLE_MTX_INITIALIZER_NP;
 
@@ -249,8 +233,6 @@ static struct instance_data *new_instance_data(VkInstance instance)
 
 static void destroy_instance_data(struct instance_data *data)
 {
-   if (data->params.output_file)
-      fclose(data->params.output_file);
    unmap_object(HKEY(data->instance));
    ralloc_free(data);
 }
@@ -365,11 +347,12 @@ static void destroy_device_data(struct device_data *data)
 static struct swapchain_data *new_swapchain_data(VkSwapchainKHR swapchain,
                                                  struct device_data *device_data)
 {
-   struct instance_data *instance_data = device_data->instance;
    struct swapchain_data *data = rzalloc(NULL, struct swapchain_data);
    data->device = device_data;
    data->swapchain = swapchain;
-   data->window_size = ImVec2(instance_data->params.width, instance_data->params.height);
+   // initialize the window size with
+   // some default values
+   data->window_size = ImVec2(128, 128);
    list_inithead(&data->draws);
    map_object(HKEY(data->swapchain), data);
    return data;
@@ -429,42 +412,56 @@ struct overlay_draw *get_overlay_draw(struct swapchain_data *data)
    return draw;
 }
 
-static void position_layer(struct swapchain_data *data)
-
-{
-   struct device_data *device_data = data->device;
-   struct instance_data *instance_data = device_data->instance;
-   const float margin = 10.0f;
-
-   ImGui::SetNextWindowBgAlpha(0.5);
-   ImGui::SetNextWindowSize(data->window_size, ImGuiCond_Always);
-   switch (instance_data->params.position) {
-   case LAYER_POSITION_TOP_LEFT:
-      ImGui::SetNextWindowPos(ImVec2(margin, margin), ImGuiCond_Always);
-      break;
-   case LAYER_POSITION_TOP_RIGHT:
-      ImGui::SetNextWindowPos(ImVec2(data->width - data->window_size.x - margin, margin),
-                              ImGuiCond_Always);
-      break;
-   case LAYER_POSITION_BOTTOM_LEFT:
-      ImGui::SetNextWindowPos(ImVec2(margin, data->height - data->window_size.y - margin),
-                              ImGuiCond_Always);
-      break;
-   case LAYER_POSITION_BOTTOM_RIGHT:
-      ImGui::SetNextWindowPos(ImVec2(data->width - data->window_size.x - margin,
-                                     data->height - data->window_size.y - margin),
-                              ImGuiCond_Always);
-      break;
-   }
-}
-
 namespace vkdto {
+	enum pos {
+		TL = 0,
+		TC,
+		TR,
+		BL,
+		BC,
+		BR
+	};
+
+	namespace debug {
+		FILE	*log = 0;
+
+		std::string get_ts(void) {
+			using namespace std::chrono;
+			const auto	tp = high_resolution_clock::now();
+			const auto	tp_tm = time_point_cast<system_clock::duration>(tp);
+			const auto	tm_t = system_clock::to_time_t(tp_tm);
+			struct tm	res = {0};
+			localtime_r(&tm_t, &res);
+			char		tm_fmt[32],
+					tm_buf[32];
+			std::sprintf(tm_fmt, "%%Y-%%m-%%dT%%H:%%M:%%S.%03i", static_cast<int>(duration_cast<milliseconds>(tp.time_since_epoch()).count()%1000));
+			std::strftime(tm_buf, sizeof(tm_buf), tm_fmt, &res);
+
+			return std::string(tm_buf);
+		}
+	}
+
 	namespace opt {
+		const char	*PARAM_POS = "pos",
+				*PARAM_FONT_SIZE = "font_size",
+				*PARAM_MARGIN = "margin";
+
 		const char	*input_file = 0;
 		size_t		buf_sz = 1024*4;
 		int		ms_update_wait = 250;
 		float		font_size = 20.0;
 		float		font_x_size = -1.0;
+		float		margin = 10.0f;
+		pos		ol_pos = TL;
+	}
+
+	void set_ol_pos(const std::string& v) {
+		if(v == "tl") opt::ol_pos = pos::TL;
+		else if(v == "tc") opt::ol_pos = pos::TC;
+		else if(v == "tr") opt::ol_pos = pos::TR;
+		else if(v == "bl") opt::ol_pos = pos::BL;
+		else if(v == "bc") opt::ol_pos = pos::BC;
+		else if(v == "br") opt::ol_pos = pos::BR;
 	}
 
 	void load_opt(void) {
@@ -473,7 +470,51 @@ namespace vkdto {
 		if(!first_run || !first_run.compare_exchange_strong(exp_val, false))
 			return;
 
+		// debug file
+		const char* dbg_file = std::getenv("VKDTO_DEBUG_LOG");
+		if(dbg_file) {
+			debug::log = std::fopen(dbg_file, "a");
+			if(debug::log) {
+				std::fprintf(debug::log, "%s VKDTO_DEBUG_LOG started\n", debug::get_ts().c_str());
+			}
+		}
+
+		// file to be loaded
 		opt::input_file = std::getenv("VKDTO_FILE");
+
+		// scan the options
+		// format is
+		// <param>=<value>:<param>=<value>:...
+		const char	*opt_str = std::getenv("VKDTO_OPT");
+		if(opt_str) {
+			while(*opt_str) {
+				// search for ':'
+				// and for '='
+				const char		*next_p = std::strchr(opt_str, ':'),
+							*cur_sep = std::strchr(opt_str, '=');
+				if(next_p && (!cur_sep || (cur_sep > next_p))) {
+					opt_str = next_p+1;
+					continue;
+				} else if (!cur_sep) {
+					break;
+				}
+				const std::string	cur_p(opt_str, cur_sep),
+							cur_v(next_p ? std::string(cur_sep+1, next_p) : std::string(cur_sep+1));
+				// decide which parameter to fill
+				if(cur_p == opt::PARAM_POS) set_ol_pos(cur_v);
+				else if(cur_p == opt::PARAM_FONT_SIZE) {
+					const double	val = std::atof(cur_v.c_str());
+					if(val > 0.0) opt::font_size = val;
+				} else if(cur_p == opt::PARAM_MARGIN) {
+					const double	val = std::atof(cur_v.c_str());
+					if(val >= 0.0) opt::margin = val;
+				}
+
+				// set the next opt_str
+				// and carry on
+				opt_str = next_p ? (next_p + 1) : (opt_str + std::strlen(opt_str));
+			}
+		}
 	}
 
 	void set_font_x_size(ImFont* regular, ImFont* bold) {
@@ -583,6 +624,52 @@ namespace vkdto {
 		return data;
 	}
 
+	void position_layer(struct swapchain_data *data) {
+		if(debug::log) {
+			std::fprintf(debug::log,
+					"%s %s swapchain_data %p data->width %d data->height %d\n",
+					debug::get_ts().c_str(),
+					__FUNCTION__,
+					data,
+					data->width,
+					data->height);
+			std::fflush(debug::log);
+		}
+
+
+		ImGui::SetNextWindowBgAlpha(0.5);
+		ImGui::SetNextWindowSize(data->window_size, ImGuiCond_Always);
+		switch (opt::ol_pos) {
+		default:
+		case pos::TL:
+			ImGui::SetNextWindowPos(ImVec2(opt::margin, opt::margin), ImGuiCond_Always);
+			break;
+		case pos::TC:
+			ImGui::SetNextWindowPos(ImVec2(0.5*(data->width - data->window_size.x), opt::margin),
+					      ImGuiCond_Always);
+			break;
+		case pos::TR:
+			ImGui::SetNextWindowPos(ImVec2(data->width - data->window_size.x - opt::margin, opt::margin),
+					      ImGuiCond_Always);
+			break;
+		case pos::BL:
+			ImGui::SetNextWindowPos(ImVec2(opt::margin, data->height - data->window_size.y - opt::margin),
+					      ImGuiCond_Always);
+			break;
+		case pos::BC:
+			ImGui::SetNextWindowPos(ImVec2(0.5*(data->width - data->window_size.x),
+						data->height - data->window_size.y - opt::margin),
+					      ImGuiCond_Always);
+			break;
+		case pos::BR:
+			ImGui::SetNextWindowPos(ImVec2(data->width - data->window_size.x - opt::margin,
+						     data->height - data->window_size.y - opt::margin),
+					      ImGuiCond_Always);
+			break;
+		}
+	}
+
+
 	// Utility function to process metadata attributes
 	void draw_metadata(const uint32_t md, struct swapchain_data *sc_data, bool& draw_white_bg) {
 		switch(md) {
@@ -643,15 +730,21 @@ namespace vkdto {
 	};
 
 	rect2s draw_data(const wchar_t* data, struct swapchain_data *sc_data) {
-		rect2s		rv = {0, 1};
+		rect2s		rv = {0, 0};
 		const wchar_t	*cur_data = data,
 				*next_line = wcschr(cur_data, L'\n');
 		bool		draw_white_bg = false;
 
 		auto fn_print_row = [&sc_data, &draw_white_bg](const wchar_t* b, const wchar_t* e) -> size_t {
 			const static wchar_t	ESC_CHAR = L'#';
-			ssize_t			rv = 0;
 			const wchar_t*		next_esc = wcschr(b, ESC_CHAR);
+			float			cur_pos = -1.0;
+
+			auto fn_set_cur_pos = [&cur_pos](void) -> void {
+				const auto	c_cur_pos = ImGui::GetCursorPosX();
+				if(c_cur_pos > cur_pos)
+					cur_pos = c_cur_pos;
+			};
 
 			if(e == b) {
 				ImGui::Text("%s", "");
@@ -674,18 +767,16 @@ namespace vkdto {
 				const auto	utf8s(to_utf8(b, next_esc));
 				fn_draw_bg(utf8s);
 				// print what is between b and next_esc (reset the line)
-				ImGui::Text("%s", utf8s.c_str()); ImGui::SameLine(0.0f, 0.0f);
-				rv += next_esc - b;
+				ImGui::Text("%s", utf8s.c_str()); ImGui::SameLine(0.0f, 0.0f); fn_set_cur_pos();
 				// there should be at least 2 valid wchar_t at
 				// next_esc pointer: itself and the one after
 				// if it's not the case, we have malformed input
 				if(next_esc+2 > e)
-					return rv;
+					return (size_t)cur_pos;
 				// in case is fimply to escape the '#', print it
 				if(next_esc[1] == ESC_CHAR) {
 					fn_draw_bg("#");
-					ImGui::Text("%s", "#"); ImGui::SameLine(0.0f, 0.0f);
-					++rv;
+					ImGui::Text("%s", "#"); ImGui::SameLine(0.0f, 0.0f); fn_set_cur_pos();
 				} else {
 					draw_metadata((uint32_t)next_esc[1], sc_data, draw_white_bg);
 				}
@@ -694,14 +785,13 @@ namespace vkdto {
 				next_esc = wcschr(b, ESC_CHAR);
 			}
 			if(e > b) {
-				rv += e-b;
 				const auto	utf8s(to_utf8(b, e));
 				fn_draw_bg(utf8s);
-				ImGui::Text("%s", utf8s.c_str()); ImGui::SameLine(0.0f, 0.0f);
+				ImGui::Text("%s", utf8s.c_str()); ImGui::SameLine(0.0f, 0.0f); fn_set_cur_pos();
 			}
 			// no matter what happens, print a newline...
 			ImGui::Text("%s", "");
-			return rv;
+			return (size_t)cur_pos;
 		};
 
 		while(next_line) {
@@ -709,11 +799,11 @@ namespace vkdto {
 			if(cur_rv > rv.x) rv.x = cur_rv;
 			cur_data = next_line+1;
 			next_line = wcschr(cur_data, L'\n');
-			rv.y += 1;
 		}
 		const auto	sz_left = wcslen(cur_data);
 		const auto	last_rv = fn_print_row(cur_data, cur_data + sz_left);
 		if(last_rv > rv.x) rv.x = last_rv;
+		rv.y = (size_t)ImGui::GetCursorPosY();
 
 		return rv;
 	}
@@ -721,9 +811,6 @@ namespace vkdto {
 
 static void compute_swapchain_display(struct swapchain_data *data)
 {
-   //struct device_data *device_data = data->device;
-   //struct instance_data *instance_data = device_data->instance;
-
    ImGui::SetCurrentContext(data->imgui_context);
    ImGui::NewFrame();
    // setup basic font and spacing
@@ -731,88 +818,18 @@ static void compute_swapchain_display(struct swapchain_data *data)
    if(vkdto::opt::font_x_size <= 0.0)
 	   vkdto::set_font_x_size(data->ubuntu_mon_reg, data->ubuntu_mon_bold);
    ImGui::PushFont(data->ubuntu_mon_reg);
-   position_layer(data);
+   vkdto::position_layer(data);
    ImGui::Begin("vkdto", 0, ImGuiWindowFlags_NoDecoration);
 
-   vkdto::load_opt();
    const wchar_t	*cur_data = vkdto::sample_data();
    const auto		rc = vkdto::draw_data(cur_data, data);
 
-   data->window_size = ImVec2(vkdto::opt::font_x_size*(1.0+rc.x) + 5.0, ImGui::GetTextLineHeightWithSpacing()*(rc.y+1));
+   data->window_size = ImVec2(rc.x + 8.0, rc.y + 8.0);
    ImGui::End();
    ImGui::PopFont();
    ImGui::PopStyleVar();
    ImGui::EndFrame();
    ImGui::Render();
-
-   /*ImGui::Begin("Mesa overlay");
-   ImGui::Text("Device: %s", device_data->properties.deviceName);
-   //ImGui::Text("Kanjis: \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e (nihongo)");
-
-   const char *format_name = vk_Format_to_str(data->format);
-   format_name = format_name ? (format_name + strlen("VK_FORMAT_")) : "unknown";
-   ImGui::Text("Swapchain format: %s", format_name);
-   ImGui::Text("Frames: %" PRIu64, data->n_frames);
-   if (instance_data->params.enabled[OVERLAY_PARAM_ENABLED_fps])
-      ImGui::Text("FPS: %.2f" , data->fps);
-
-   // Recompute min/max 
-   for (uint32_t s = 0; s < OVERLAY_PARAM_ENABLED_MAX; s++) {
-      data->stats_min.stats[s] = UINT64_MAX;
-      data->stats_max.stats[s] = 0;
-   }
-   for (uint32_t f = 0; f < MIN2(data->n_frames, ARRAY_SIZE(data->frames_stats)); f++) {
-      for (uint32_t s = 0; s < OVERLAY_PARAM_ENABLED_MAX; s++) {
-         data->stats_min.stats[s] = MIN2(data->frames_stats[f].stats[s],
-                                         data->stats_min.stats[s]);
-         data->stats_max.stats[s] = MAX2(data->frames_stats[f].stats[s],
-                                         data->stats_max.stats[s]);
-      }
-   }
-   for (uint32_t s = 0; s < OVERLAY_PARAM_ENABLED_MAX; s++) {
-      assert(data->stats_min.stats[s] != UINT64_MAX);
-   }
-
-   for (uint32_t s = 0; s < OVERLAY_PARAM_ENABLED_MAX; s++) {
-      if (!instance_data->params.enabled[s] ||
-          s == OVERLAY_PARAM_ENABLED_fps ||
-          s == OVERLAY_PARAM_ENABLED_frame)
-         continue;
-
-      char hash[40];
-      snprintf(hash, sizeof(hash), "##%s", overlay_param_names[s]);
-      data->stat_selector = (enum overlay_param_enabled) s;
-      data->time_dividor = 1000.0f;
-      if (s == OVERLAY_PARAM_ENABLED_gpu_timing)
-         data->time_dividor = 1000000.0f;
-
-      if (s == OVERLAY_PARAM_ENABLED_frame_timing ||
-          s == OVERLAY_PARAM_ENABLED_acquire_timing ||
-          s == OVERLAY_PARAM_ENABLED_present_timing ||
-          s == OVERLAY_PARAM_ENABLED_gpu_timing) {
-         double min_time = data->stats_min.stats[s] / data->time_dividor;
-         double max_time = data->stats_max.stats[s] / data->time_dividor;
-         ImGui::PlotHistogram(hash, get_time_stat, data,
-                              ARRAY_SIZE(data->frames_stats), 0,
-                              NULL, min_time, max_time,
-                              ImVec2(ImGui::GetContentRegionAvailWidth(), 30));
-         ImGui::Text("%s: %.3fms [%.3f, %.3f]", overlay_param_names[s],
-                     get_time_stat(data, ARRAY_SIZE(data->frames_stats) - 1),
-                     min_time, max_time);
-      } else {
-         ImGui::PlotHistogram(hash, get_stat, data,
-                              ARRAY_SIZE(data->frames_stats), 0,
-                              NULL,
-                              data->stats_min.stats[s],
-                              data->stats_max.stats[s],
-                              ImVec2(ImGui::GetContentRegionAvailWidth(), 30));
-         ImGui::Text("%s: %.0f [%" PRIu64 ", %" PRIu64 "]", overlay_param_names[s],
-                     get_stat(data, ARRAY_SIZE(data->frames_stats) - 1),
-                     data->stats_min.stats[s], data->stats_max.stats[s]);
-      }
-   }
-   data->window_size = ImVec2(data->window_size.x, ImGui::GetCursorPosY() + 10.0f);
-   ImGui::End();*/
 }
 
 static uint32_t vk_memory_type(struct device_data *data,
@@ -1520,6 +1537,21 @@ static void setup_swapchain_data_pipeline(struct swapchain_data *data)
 static void setup_swapchain_data(struct swapchain_data *data,
                                  const VkSwapchainCreateInfoKHR *pCreateInfo)
 {
+   // load options here, before we instantiate
+   // ImGui objects and whatnot
+   vkdto::load_opt();
+
+   if(vkdto::debug::log) {
+	   std::fprintf(vkdto::debug::log,
+			   "%s %s swapchain_data %p pCreateInfo->imageExtent.width %d, pCreateInfo->imageExtent.height %d\n",
+			   vkdto::debug::get_ts().c_str(),
+			   __FUNCTION__,
+			   data,
+			   pCreateInfo->imageExtent.width,
+			   pCreateInfo->imageExtent.height);
+	   std::fflush(vkdto::debug::log);
+   }
+
    data->width = pCreateInfo->imageExtent.width;
    data->height = pCreateInfo->imageExtent.height;
    data->format = pCreateInfo->imageFormat;
@@ -1629,6 +1661,15 @@ static void setup_swapchain_data(struct swapchain_data *data,
 
 static void shutdown_swapchain_data(struct swapchain_data *data)
 {
+   if(vkdto::debug::log) {
+	   std::fprintf(vkdto::debug::log,
+			   "%s %s swapchain_data %p\n",
+			   vkdto::debug::get_ts().c_str(),
+			   __FUNCTION__,
+			   data);
+	   std::fflush(vkdto::debug::log);
+   }
+
    struct device_data *device_data = data->device;
 
    list_for_each_entry_safe(struct overlay_draw, draw, &data->draws, link) {
@@ -1675,14 +1716,22 @@ static struct overlay_draw *before_present(struct swapchain_data *swapchain_data
                                            unsigned n_wait_semaphores,
                                            unsigned imageIndex)
 {
-   struct instance_data *instance_data = swapchain_data->device->instance;
    struct overlay_draw *draw = NULL;
 
-   if (!instance_data->params.no_display) {
-      compute_swapchain_display(swapchain_data);
-      draw = render_swapchain_display(swapchain_data, present_queue,
-                                      wait_semaphores, n_wait_semaphores,
-                                      imageIndex);
+   compute_swapchain_display(swapchain_data);
+   draw = render_swapchain_display(swapchain_data, present_queue,
+                                   wait_semaphores, n_wait_semaphores,
+                                   imageIndex);
+
+   if(vkdto::debug::log) {
+      std::fprintf(vkdto::debug::log,
+		      "%s %s swapchain_data %p present_queue %p overlay_draw %p\n",
+		      vkdto::debug::get_ts().c_str(),
+		      __FUNCTION__,
+		      swapchain_data,
+		      present_queue,
+		      draw);
+      std::fflush(vkdto::debug::log);
    }
 
    return draw;
@@ -1721,68 +1770,43 @@ static VkResult overlay_QueuePresentKHR(
     const VkPresentInfoKHR*                     pPresentInfo)
 {
    struct queue_data *queue_data = FIND(struct queue_data, queue);
-   struct device_data *device_data = queue_data->device;
-   struct instance_data *instance_data = device_data->instance;
 
    /* Otherwise we need to add our overlay drawing semaphore to the list of
     * semaphores to wait on. If we don't do that the presented picture might
     * be have incomplete overlay drawings.
     */
    VkResult result = VK_SUCCESS;
-   if (instance_data->params.no_display) {
-      for (uint32_t i = 0; i < pPresentInfo->swapchainCount; i++) {
-         VkSwapchainKHR swapchain = pPresentInfo->pSwapchains[i];
-         struct swapchain_data *swapchain_data =
-            FIND(struct swapchain_data, swapchain);
+   for (uint32_t i = 0; i < pPresentInfo->swapchainCount; i++) {
+      VkSwapchainKHR swapchain = pPresentInfo->pSwapchains[i];
+      struct swapchain_data *swapchain_data =
+         FIND(struct swapchain_data, swapchain);
 
-         uint32_t image_index = pPresentInfo->pImageIndices[i];
+      uint32_t image_index = pPresentInfo->pImageIndices[i];
 
-         before_present(swapchain_data,
-                        queue_data,
-                        pPresentInfo->pWaitSemaphores,
-                        pPresentInfo->waitSemaphoreCount,
-                        image_index);
+      VkPresentInfoKHR present_info = *pPresentInfo;
+      present_info.swapchainCount = 1;
+      present_info.pSwapchains = &swapchain;
+      present_info.pImageIndices = &image_index;
 
-         VkPresentInfoKHR present_info = *pPresentInfo;
-         present_info.swapchainCount = 1;
-         present_info.pSwapchains = &swapchain;
-         present_info.pImageIndices = &image_index;
+      struct overlay_draw *draw = before_present(swapchain_data,
+                                                 queue_data,
+                                                 pPresentInfo->pWaitSemaphores,
+                                                 pPresentInfo->waitSemaphoreCount,
+                                                 image_index);
 
-         result = queue_data->device->vtable.QueuePresentKHR(queue, &present_info);
-      }
-   } else {
-      for (uint32_t i = 0; i < pPresentInfo->swapchainCount; i++) {
-         VkSwapchainKHR swapchain = pPresentInfo->pSwapchains[i];
-         struct swapchain_data *swapchain_data =
-            FIND(struct swapchain_data, swapchain);
+      /* Because the submission of the overlay draw waits on the semaphores
+       * handed for present, we don't need to have this present operation
+       * wait on them as well, we can just wait on the overlay submission
+       * semaphore.
+       */
+      present_info.pWaitSemaphores = &draw->semaphore;
+      present_info.waitSemaphoreCount = 1;
 
-         uint32_t image_index = pPresentInfo->pImageIndices[i];
-
-         VkPresentInfoKHR present_info = *pPresentInfo;
-         present_info.swapchainCount = 1;
-         present_info.pSwapchains = &swapchain;
-         present_info.pImageIndices = &image_index;
-
-         struct overlay_draw *draw = before_present(swapchain_data,
-                                                    queue_data,
-                                                    pPresentInfo->pWaitSemaphores,
-                                                    pPresentInfo->waitSemaphoreCount,
-                                                    image_index);
-
-         /* Because the submission of the overlay draw waits on the semaphores
-          * handed for present, we don't need to have this present operation
-          * wait on them as well, we can just wait on the overlay submission
-          * semaphore.
-          */
-         present_info.pWaitSemaphores = &draw->semaphore;
-         present_info.waitSemaphoreCount = 1;
-
-         VkResult chain_result = queue_data->device->vtable.QueuePresentKHR(queue, &present_info);
-         if (pPresentInfo->pResults)
-            pPresentInfo->pResults[i] = chain_result;
-         if (chain_result != VK_SUCCESS && result == VK_SUCCESS)
-            result = chain_result;
-      }
+      VkResult chain_result = queue_data->device->vtable.QueuePresentKHR(queue, &present_info);
+      if (pPresentInfo->pResults)
+         pPresentInfo->pResults[i] = chain_result;
+      if (chain_result != VK_SUCCESS && result == VK_SUCCESS)
+         result = chain_result;
    }
    return result;
 }
@@ -1875,8 +1899,6 @@ static VkResult overlay_CreateInstance(
                              &instance_data->vtable);
    instance_data_map_physical_devices(instance_data, true);
 
-   parse_overlay_env(&instance_data->params, getenv("VK_LAYER_MESA_OVERLAY_CONFIG"));
-
    return result;
 }
 
@@ -1947,3 +1969,4 @@ extern "C" VK_LAYER_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkdto_vkGetI
    if (instance_data->vtable.GetInstanceProcAddr == NULL) return NULL;
    return instance_data->vtable.GetInstanceProcAddr(instance, funcName);
 }
+

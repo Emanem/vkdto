@@ -30,6 +30,8 @@
 #include <thread>
 #include <vector>
 #include <cstring>
+#include <cstdio>
+#include <iostream>
 
 #include <sys/types.h>
 #include <sys/stat.h>

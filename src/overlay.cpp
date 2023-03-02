@@ -446,14 +446,16 @@ namespace vkdto {
 	namespace opt {
 		const char	*PARAM_POS = "pos",
 				*PARAM_FONT_SIZE = "font_size",
-				*PARAM_MARGIN = "margin";
+				*PARAM_MARGIN = "margin",
+				*PARAM_ALPHA = "alpha";
 
 		const char	*input_file = 0;
-		size_t		buf_sz = 1024*4;
+		size_t		buf_sz = 1024*16; //16K buffers
 		int		ms_update_wait = 250;
-		float		font_size = 20.0;
-		float		font_x_size = -1.0;
+		float		font_size = 20.0f;
+		float		font_x_size = -1.0f;
 		float		margin = 10.0f;
+		float		alpha = 1.0f;
 		pos		ol_pos = TL;
 	}
 
@@ -510,6 +512,10 @@ namespace vkdto {
 				} else if(cur_p == opt::PARAM_MARGIN) {
 					const double	val = std::atof(cur_v.c_str());
 					if(val >= 0.0) opt::margin = val;
+				} else if(cur_p == opt::PARAM_ALPHA) {
+					const double	val = std::atof(cur_v.c_str());
+					if(val >= 0.0) opt::alpha = val;
+					if(opt::alpha > 1.0f) opt::alpha = 1.0f;
 				}
 
 				// set the next opt_str
@@ -581,15 +587,20 @@ namespace vkdto {
 
 				int	fd = open(opt::input_file, O_RDONLY);
 				if(-1 != fd) {
-					// read as much as we can
-					const auto	rb = read(fd, (char*)&bufs[next_idx][0], (opt::buf_sz - 1)*sizeof(wchar_t));
-					if(rb >= (ssize_t)sizeof(wchar_t)) {
-						// data should be wchar_t divisible
-						// but we truncate anyway
-						const auto	last_wchar = (rb/sizeof(wchar_t) > 0) ? rb/sizeof(wchar_t) : 0;
-						bufs[next_idx][last_wchar] = L'\0';
-					}
+					int 	rb = -1,
+						tot_rb = 0;
+					char	*buf_start = (char*)&bufs[next_idx][0];
+					do {
+						// read as much as we can
+						rb = read(fd, buf_start + tot_rb, (opt::buf_sz)*sizeof(wchar_t) - tot_rb);
+						if(rb > 0)
+							tot_rb += rb;
+					} while(rb > 0);
 					close(fd);
+					// data should be wchar_t divisible
+					// but we truncate anyway
+					const auto	last_wchar = tot_rb/sizeof(wchar_t);
+					bufs[next_idx][last_wchar] = L'\0';
 				}
 			}
 			data_buffer.store(&bufs[next_idx][0]);
@@ -639,7 +650,7 @@ namespace vkdto {
 		}
 
 
-		ImGui::SetNextWindowBgAlpha(0.5);
+		ImGui::SetNextWindowBgAlpha(opt::alpha*0.5f);
 		ImGui::SetNextWindowSize(data->window_size, ImGuiCond_Always);
 		switch (opt::ol_pos) {
 		default:
@@ -682,7 +693,7 @@ namespace vkdto {
 			ImGui::PopFont();
 		} break;
 		case ht_fmt::DIM_ON: {
-			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
+			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, opt::alpha*0.5f);
 		} break;
 		case ht_fmt::DIM_OFF: {
 			ImGui::PopStyleVar();
@@ -796,12 +807,16 @@ namespace vkdto {
 			return (size_t)cur_pos;
 		};
 
+		// set alpha value for all text
+		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, opt::alpha);
 		while(next_line) {
 			const auto	cur_rv = fn_print_row(cur_data, next_line);
 			if(cur_rv > rv.x) rv.x = cur_rv;
 			cur_data = next_line+1;
 			next_line = wcschr(cur_data, L'\n');
 		}
+		// pop global alpha value
+		ImGui::PopStyleVar();
 		const auto	sz_left = wcslen(cur_data);
 		const auto	last_rv = fn_print_row(cur_data, cur_data + sz_left);
 		if(last_rv > rv.x) rv.x = last_rv;

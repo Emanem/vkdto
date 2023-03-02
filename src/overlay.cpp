@@ -809,19 +809,20 @@ namespace vkdto {
 
 		// set alpha value for all text
 		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, opt::alpha);
+
 		while(next_line) {
 			const auto	cur_rv = fn_print_row(cur_data, next_line);
 			if(cur_rv > rv.x) rv.x = cur_rv;
 			cur_data = next_line+1;
 			next_line = wcschr(cur_data, L'\n');
 		}
-		// pop global alpha value
-		ImGui::PopStyleVar();
 		const auto	sz_left = wcslen(cur_data);
 		const auto	last_rv = fn_print_row(cur_data, cur_data + sz_left);
 		if(last_rv > rv.x) rv.x = last_rv;
 		rv.y = (size_t)ImGui::GetCursorPosY();
 
+		// pop global alpha value
+		ImGui::PopStyleVar();
 		return rv;
 	}
 }
